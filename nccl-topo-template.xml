@@ -1,0 +1,181 @@
+<?xml version="1.0"?>
+<!--
+  NCCL Topology XML Template (NCCL 2.10.3-1, version=1)
+  ============================================================
+  Usage:
+    export NCCL_TOPO_FILE=/path/to/this/file.xml
+    NCCL will skip hardware auto-detection and trust this layout.
+
+  Pattern shown: 1 node, 2 NUMA domains, 4 GPU + 1 NIC per NUMA,
+  full NVLink mesh between all 8 GPUs (DGX-A100 style).
+
+  Tip:
+    To get a real dump from your machine, run any NCCL program with
+      export NCCL_TOPO_DUMP_FILE=topo.xml
+      export NCCL_DEBUG=INFO
+    and use that as a starting point.
+-->
+<system version="1">
+
+  <!-- ===== NUMA domain 0: GPUs 0-3 + mlx5_0 ===== -->
+  <cpu numaid="0"
+       affinity="00000000,00000000,00000000,000000ff"
+       arch="x86_64"
+       vendor="GenuineIntel"
+       familyid="6"
+       modelid="106">
+
+    <!-- PCI switch hosting GPU 0..3 and one NIC -->
+    <pci busid="0000:18:00.0" class="0x060400" vendor="0x10b5" device="0x9781"
+         link_speed="16.0 GT/s PCIe" link_width="16">
+
+      <pci busid="0000:1a:00.0" class="0x030200" vendor="0x10de" device="0x20b0"
+           link_speed="16.0 GT/s PCIe" link_width="16">
+        <gpu dev="0" sm="80" rank="0" gdr="1">
+          <!-- NVLink to every other GPU. count = number of NVLink lanes (A100=12 typical). -->
+          <nvlink target="0000:1c:00.0" count="2" tclass="0x068000"/>
+          <nvlink target="0000:1e:00.0" count="2" tclass="0x068000"/>
+          <nvlink target="0000:3d:00.0" count="2" tclass="0x068000"/>
+          <nvlink target="0000:3f:00.0" count="2" tclass="0x068000"/>
+          <nvlink target="0000:41:00.0" count="2" tclass="0x068000"/>
+          <nvlink target="0000:43:00.0" count="2" tclass="0x068000"/>
+          <nvlink target="0000:45:00.0" count="2" tclass="0x068000"/>
+        </gpu>
+      </pci>
+
+      <pci busid="0000:1c:00.0" class="0x030200" vendor="0x10de" device="0x20b0"
+           link_speed="16.0 GT/s PCIe" link_width="16">
+        <gpu dev="1" sm="80" rank="1" gdr="1">
+          <nvlink target="0000:1a:00.0" count="2" tclass="0x068000"/>
+          <nvlink target="0000:1e:00.0" count="2" tclass="0x068000"/>
+          <nvlink target="0000:3d:00.0" count="2" tclass="0x068000"/>
+          <nvlink target="0000:3f:00.0" count="2" tclass="0x068000"/>
+          <nvlink target="0000:41:00.0" count="2" tclass="0x068000"/>
+          <nvlink target="0000:43:00.0" count="2" tclass="0x068000"/>
+          <nvlink target="0000:45:00.0" count="2" tclass="0x068000"/>
+        </gpu>
+      </pci>
+
+      <pci busid="0000:1e:00.0" class="0x030200" vendor="0x10de" device="0x20b0"
+           link_speed="16.0 GT/s PCIe" link_width="16">
+        <gpu dev="2" sm="80" rank="2" gdr="1">
+          <nvlink target="0000:1a:00.0" count="2" tclass="0x068000"/>
+          <nvlink target="0000:1c:00.0" count="2" tclass="0x068000"/>
+          <nvlink target="0000:3d:00.0" count="2" tclass="0x068000"/>
+          <nvlink target="0000:3f:00.0" count="2" tclass="0x068000"/>
+          <nvlink target="0000:41:00.0" count="2" tclass="0x068000"/>
+          <nvlink target="0000:43:00.0" count="2" tclass="0x068000"/>
+          <nvlink target="0000:45:00.0" count="2" tclass="0x068000"/>
+        </gpu>
+      </pci>
+
+      <pci busid="0000:3d:00.0" class="0x030200" vendor="0x10de" device="0x20b0"
+           link_speed="16.0 GT/s PCIe" link_width="16">
+        <gpu dev="3" sm="80" rank="3" gdr="1">
+          <nvlink target="0000:1a:00.0" count="2" tclass="0x068000"/>
+          <nvlink target="0000:1c:00.0" count="2" tclass="0x068000"/>
+          <nvlink target="0000:1e:00.0" count="2" tclass="0x068000"/>
+          <nvlink target="0000:3f:00.0" count="2" tclass="0x068000"/>
+          <nvlink target="0000:41:00.0" count="2" tclass="0x068000"/>
+          <nvlink target="0000:43:00.0" count="2" tclass="0x068000"/>
+          <nvlink target="0000:45:00.0" count="2" tclass="0x068000"/>
+        </gpu>
+      </pci>
+
+      <!-- Mellanox CX-6 NIC for NUMA 0 -->
+      <pci busid="0000:38:00.0" class="0x020700" vendor="0x15b3" device="0x101d"
+           link_speed="16.0 GT/s PCIe" link_width="16">
+        <nic>
+          <net name="mlx5_0"
+               dev="0"
+               guid="0x506b4b0300abcd00"
+               speed="200000"
+               port="1"
+               gdr="1"
+               maxconn="65536"/>
+        </nic>
+      </pci>
+
+    </pci>
+  </cpu>
+
+  <!-- ===== NUMA domain 1: GPUs 4-7 + mlx5_1 ===== -->
+  <cpu numaid="1"
+       affinity="00000000,00000000,00000000,0000ff00"
+       arch="x86_64"
+       vendor="GenuineIntel"
+       familyid="6"
+       modelid="106">
+
+    <pci busid="0000:3a:00.0" class="0x060400" vendor="0x10b5" device="0x9781"
+         link_speed="16.0 GT/s PCIe" link_width="16">
+
+      <pci busid="0000:3f:00.0" class="0x030200" vendor="0x10de" device="0x20b0"
+           link_speed="16.0 GT/s PCIe" link_width="16">
+        <gpu dev="4" sm="80" rank="4" gdr="1">
+          <nvlink target="0000:1a:00.0" count="2" tclass="0x068000"/>
+          <nvlink target="0000:1c:00.0" count="2" tclass="0x068000"/>
+          <nvlink target="0000:1e:00.0" count="2" tclass="0x068000"/>
+          <nvlink target="0000:3d:00.0" count="2" tclass="0x068000"/>
+          <nvlink target="0000:41:00.0" count="2" tclass="0x068000"/>
+          <nvlink target="0000:43:00.0" count="2" tclass="0x068000"/>
+          <nvlink target="0000:45:00.0" count="2" tclass="0x068000"/>
+        </gpu>
+      </pci>
+
+      <pci busid="0000:41:00.0" class="0x030200" vendor="0x10de" device="0x20b0"
+           link_speed="16.0 GT/s PCIe" link_width="16">
+        <gpu dev="5" sm="80" rank="5" gdr="1">
+          <nvlink target="0000:1a:00.0" count="2" tclass="0x068000"/>
+          <nvlink target="0000:1c:00.0" count="2" tclass="0x068000"/>
+          <nvlink target="0000:1e:00.0" count="2" tclass="0x068000"/>
+          <nvlink target="0000:3d:00.0" count="2" tclass="0x068000"/>
+          <nvlink target="0000:3f:00.0" count="2" tclass="0x068000"/>
+          <nvlink target="0000:43:00.0" count="2" tclass="0x068000"/>
+          <nvlink target="0000:45:00.0" count="2" tclass="0x068000"/>
+        </gpu>
+      </pci>
+
+      <pci busid="0000:43:00.0" class="0x030200" vendor="0x10de" device="0x20b0"
+           link_speed="16.0 GT/s PCIe" link_width="16">
+        <gpu dev="6" sm="80" rank="6" gdr="1">
+          <nvlink target="0000:1a:00.0" count="2" tclass="0x068000"/>
+          <nvlink target="0000:1c:00.0" count="2" tclass="0x068000"/>
+          <nvlink target="0000:1e:00.0" count="2" tclass="0x068000"/>
+          <nvlink target="0000:3d:00.0" count="2" tclass="0x068000"/>
+          <nvlink target="0000:3f:00.0" count="2" tclass="0x068000"/>
+          <nvlink target="0000:41:00.0" count="2" tclass="0x068000"/>
+          <nvlink target="0000:45:00.0" count="2" tclass="0x068000"/>
+        </gpu>
+      </pci>
+
+      <pci busid="0000:45:00.0" class="0x030200" vendor="0x10de" device="0x20b0"
+           link_speed="16.0 GT/s PCIe" link_width="16">
+        <gpu dev="7" sm="80" rank="7" gdr="1">
+          <nvlink target="0000:1a:00.0" count="2" tclass="0x068000"/>
+          <nvlink target="0000:1c:00.0" count="2" tclass="0x068000"/>
+          <nvlink target="0000:1e:00.0" count="2" tclass="0x068000"/>
+          <nvlink target="0000:3d:00.0" count="2" tclass="0x068000"/>
+          <nvlink target="0000:3f:00.0" count="2" tclass="0x068000"/>
+          <nvlink target="0000:41:00.0" count="2" tclass="0x068000"/>
+          <nvlink target="0000:43:00.0" count="2" tclass="0x068000"/>
+        </gpu>
+      </pci>
+
+      <pci busid="0000:48:00.0" class="0x020700" vendor="0x15b3" device="0x101d"
+           link_speed="16.0 GT/s PCIe" link_width="16">
+        <nic>
+          <net name="mlx5_1"
+               dev="1"
+               guid="0x506b4b0300abcd01"
+               speed="200000"
+               port="1"
+               gdr="1"
+               maxconn="65536"/>
+        </nic>
+      </pci>
+
+    </pci>
+  </cpu>
+
+</system>
