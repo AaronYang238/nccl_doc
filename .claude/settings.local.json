@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(where pandoc *)",
+      "Bash(pandoc --version)",
+      "Bash(where mmdc *)",
+      "Bash(npm list *)",
+      "Bash(pip list *)",
+      "Bash(pip install *)",
+      "Bash(where soffice *)",
+      "Read(//c/Program Files/**)",
+      "WebSearch",
+      "WebFetch(domain:support.anthropic.com)",
+      "WebFetch(domain:support.claude.com)",
+      "Bash(awk '/^#{2,4} / {if \\(last\\) print last_n, NR-last_n-1, last; last_n=NR; last=$0} END {if \\(last\\) print last_n, NR-last_n, last}' \"C:\\\\workspace\\\\nccl\\\\nccl-2.10.3-detailed-design.md\")",
+      "Bash(sort -k2 -nr)"
+    ]
+  }
+}
