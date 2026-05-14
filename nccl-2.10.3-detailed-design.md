@@ -533,7 +533,9 @@ flowchart LR
 | 资源 | 量级 | 备注 |
 |---|---|---|
 | ncclComm host 结构 | KB 级 | |
-| 每 channel ringbuf（host + device）| 12 MB（3 协议 × 4 MB）| `nChannels` 通常 2-8 → 数十至上百 MB device 内存 |
+| 每 connector ringbuf（host + device，三协议合计）| ≈ 9.2 MiB（Simple 4 MiB + LL 0.5 MiB + LL128 ≈ 4.7 MiB；ARM 上 Simple 降为 1 MiB） | 一个 connector = 一对 peer × 一个方向 × 一个 channel 上的一个 connIndex；完整公式与典型量级见 §4.4.7 |
+| 每 channel 激活的 connector 数 | Ring 2 个 / Tree ≤ 4 个 / CollNet ≤ 7 个；混合算法时常态 ≈ 6 个 | 仅"本 rank 在该 channel 上的直接邻居方向"才实例化 ringbuf |
+| 单 rank device 端 ringbuf 总量 | ≈ `nChannels × 邻居方向数 × 9.2 MiB` | 典型 nChannels=4、6 方向 → ~220 MiB；nChannels=8 → ~440 MiB |
 | peerInfo 数组 | nRanks × ~64 B | |
 | Proxy pthread | 1 条 | |
 | 网络资源 | IB QP / TCP socket / SHM segment | 取决于后端 |
@@ -1115,7 +1117,7 @@ flowchart LR
 | 关键事实 | 含义 |
 |---|---|
 | **单次调用通常占用多个 channel** | `info->nChannels` 由 `getAlgoInfo` 决定（典型 2-8），调度器循环调 `getNextChannel` 取一组连续 id |
-| **`lastChannel` 全局递增** | ROUND_ROBIN 用 `comm->lastChannel++ % nChannels`，**跨调用接力**，不每次复位。短期看像"0,1,2,3,0,1,2,3..."循环序列 |
+| **`lastChannel` 在 launch 边界归零** | ROUND_ROBIN 用 `comm->lastChannel++ % nChannels` 递增；但每次 `ncclLaunchProxy` 末尾会执行 `lastChannel = 0`（见 enqueue.cc），因此**同一 launch 批次内（Group 内多 op）接力，跨 launch 批次（独立调用之间、或两个 Group 之间）从 0 重新起步** |
 | **collective 与 P2P 走独立 channel 集合** | `comm->nChannels`（ring/tree）vs `comm->p2pnChannels`（send/recv 按 rank↔peer 距离哈希）—— 互不干扰、各自调度 |
 | **所有 channel 等价，没有"快慢"** | `ncclTopoGraph.speedIntra/Inter` 是标量（所有 channel 共享同一带宽阈值），所以分配不偏好低索引 |
 
@@ -1128,17 +1130,18 @@ flowchart LR
 
 需通过 `comm->asyncAllocMode` 显式切换，默认 ROUND_ROBIN。
 
-**典型行为示例**（`nChannels=4`，连续 5 次调用）：
+**典型行为示例**（`nChannels=4`，演示 launch 边界归零语义）：
 
-| 调用 | `info->nChannels` | 实际 channel id | 调用后 `lastChannel` |
+| 场景 | enqueue 期间 `lastChannel` 轨迹 | 该批次实际 channel id | launch 完成后 `lastChannel` |
 |---|---|---|---|
-| 1: AllReduce 小消息 | 2 | 0, 1 | 2 |
-| 2: AllReduce 小消息 | 2 | 2, 3 | 0（mod 后回绕）|
-| 3: AllReduce 大消息 | 4 | 0, 1, 2, 3 | 0 |
-| 4: AllReduce 小消息 | 2 | 0, 1 | 2 |
-| 5: Group{2 × AllReduce} | 各 2 | op1: 2,3；op2: 0,1 | 2 |
+| 1: 独立 AllReduce 小消息（直接路径，自带 launch）| 0 → 1 → 2 | 0, 1 | **0**（launch 末尾归零）|
+| 2: 紧接的下一次独立 AllReduce 小消息 | 0 → 1 → 2 | 0, 1 | **0**（依然从 0 起，与上一次无接力）|
+| 3: 独立 AllReduce 大消息 | 0 → 1 → 2 → 3 → 4 | 0, 1, 2, 3 | **0** |
+| 4: `Group{ AllReduce 小, AllReduce 小 }` 内：op1 | 0 → 1 → 2 | 0, 1 | （Group 内不归零）|
+| 4: 同 Group 内：op2 | 2 → 3 → 4 | 2, 3 | **0**（`GroupEnd` 触发 launch 时归零）|
+| 5: `Group{ AllReduce 小 × 3 }`，op1/op2/op3 | 0→1→2→3→4→5→6 | op1: 0,1；op2: 2,3；op3: 0,1 | **0** |
 
-这种"全局接力 + 取模"是 Group 聚合（决策 4）的性能基石——把多个梯度的 AllReduce 聚合在一个 Group 内，ROUND_ROBIN 自动均衡到所有 channel，最大化并行度。
+这种"**Group 内接力 + launch 边界归零**"是 Group 聚合（决策 4）的性能基石——把多个梯度的 AllReduce 聚合在一个 Group 内，ROUND_ROBIN 在该 Group 的单次 launch 内自动均衡到所有 channel，最大化并行度；Group 之间互相独立、不带历史偏置，避免长期累积造成某些 channel 总是优先被填满。注意：**对非 Group 的连续独立调用而言，每次都从 channel 0 起步**，因此小消息密集场景下若不显式聚合到 Group 内，仅 channel 0 / 1 会被反复使用——这是性能 regression 排查时容易忽略的一个调度细节。
 
 #### 4.4.5 bootstrap 模块：装配期 rank 互联
 
