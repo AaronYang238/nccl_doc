@@ -509,7 +509,7 @@ flowchart LR
 
 | 维度 | 装配期 | 热路径 |
 |---|---|---|
-| 触发频率 | 每个 communicator 一次（典型一个训练 job 一次）| 每次 NCCL 调用 |
+| 触发频率 | 每个 communicator 一次（典型一个训练 job 一次）| 每次 NCCL 集合通信调用 |
 | 时间预算 | 10² ms ～ 几秒 | 单调用 µs 级 |
 | 主同步原语 | bootstrap TCP AllGather | ringbuf head/tail（无锁）|
 | 失败处理 | 返回错误码 → 用户重试 | 设 fatalError → 上层轮询 `GetAsyncError` → Abort |
