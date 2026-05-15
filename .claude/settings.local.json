@@ -13,7 +13,9 @@
       "WebFetch(domain:support.anthropic.com)",
       "WebFetch(domain:support.claude.com)",
       "Bash(awk '/^#{2,4} / {if \\(last\\) print last_n, NR-last_n-1, last; last_n=NR; last=$0} END {if \\(last\\) print last_n, NR-last_n, last}' \"C:\\\\workspace\\\\nccl\\\\nccl-2.10.3-detailed-design.md\")",
-      "Bash(sort -k2 -nr)"
+      "Bash(sort -k2 -nr)",
+      "Bash(mkdir -p \"C:/Users/Aaron/.claude/skills/outline-design-doc-workspace/example-run\")",
+      "Read(//c/Users/Aaron/.claude/skills/outline-design-doc-workspace/**)"
     ]
   }
 }
