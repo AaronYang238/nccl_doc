@@ -1,0 +1,325 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 1560" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', 'Helvetica Neue', Arial, sans-serif">
+  <rect width="1280" height="1560" fill="#fafafa"/>
+
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#374151"/>
+    </marker>
+    <marker id="arr-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#1d4ed8"/>
+    </marker>
+    <marker id="arr-orange" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#c2410c"/>
+    </marker>
+    <marker id="arr-purple" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#7c3aed"/>
+    </marker>
+  </defs>
+
+  <!-- ===== Title ===== -->
+  <text x="640" y="36" text-anchor="middle" font-size="20" font-weight="bold" fill="#1f2937">transport 模块 — ringbuf 布局结构</text>
+  <text x="640" y="58" text-anchor="middle" font-size="12" fill="#4b5563">channel 单向；每个 rank 在每个 channel 上持有 1 份 ringbuf（sendBuff + 同步计数器）；全节点共 nranks × nChannels 份</text>
+
+  <!-- ============================================================ -->
+  <!-- ===== Panel A: 单个 ringbuf 内部结构 ============================ -->
+  <!-- ============================================================ -->
+  <g>
+    <rect x="30" y="80" width="1220" height="520" fill="#ffffff" stroke="#9ca3af" stroke-width="1" rx="6"/>
+    <text x="50" y="110" font-size="14" font-weight="bold" fill="#111827">面板 A · 单个 ringbuf 内部结构与内存占用（NCCL_STEPS = 8）</text>
+    <text x="50" y="128" font-size="10" fill="#6b7280">ringbuf = 数据区 buffs[8] + tail 计数器 + head 计数器；写者推 tail，读者推 head</text>
+
+    <!-- ───────── 逻辑视图：8 slots + pointers ───────── -->
+    <text x="50" y="158" font-size="12" font-weight="bold" fill="#374151">逻辑视图（slot 状态 + 指针位置）</text>
+
+    <!-- Writer label -->
+    <rect x="60" y="220" width="120" height="60" fill="#fef3c7" stroke="#b45309" stroke-width="1.5" rx="4"/>
+    <text x="120" y="243" text-anchor="middle" font-size="11" font-weight="bold" fill="#78350f">写者</text>
+    <text x="120" y="260" text-anchor="middle" font-size="10" fill="#78350f">本端 GPU</text>
+    <text x="120" y="275" text-anchor="middle" font-size="10" fill="#78350f">(send 侧)</text>
+
+    <!-- 8 slots -->
+    <g>
+      <rect x="220" y="220" width="90" height="60" fill="#dbeafe" stroke="#1d4ed8" stroke-width="1.5" rx="3"/>
+      <rect x="315" y="220" width="90" height="60" fill="#dbeafe" stroke="#1d4ed8" stroke-width="1.5" rx="3"/>
+      <rect x="410" y="220" width="90" height="60" fill="#dbeafe" stroke="#1d4ed8" stroke-width="1.5" rx="3"/>
+      <rect x="505" y="220" width="90" height="60" fill="#dbeafe" stroke="#1d4ed8" stroke-width="1.5" rx="3"/>
+      <rect x="600" y="220" width="90" height="60" fill="#e5e7eb" stroke="#6b7280" stroke-width="1.5" stroke-dasharray="3 2" rx="3"/>
+      <rect x="695" y="220" width="90" height="60" fill="#e5e7eb" stroke="#6b7280" stroke-width="1.5" stroke-dasharray="3 2" rx="3"/>
+      <rect x="790" y="220" width="90" height="60" fill="#e5e7eb" stroke="#6b7280" stroke-width="1.5" stroke-dasharray="3 2" rx="3"/>
+      <rect x="885" y="220" width="90" height="60" fill="#e5e7eb" stroke="#6b7280" stroke-width="1.5" stroke-dasharray="3 2" rx="3"/>
+
+      <text x="265" y="238" text-anchor="middle" font-size="11" font-weight="bold" fill="#1e3a8a">slot 0</text>
+      <text x="360" y="238" text-anchor="middle" font-size="11" font-weight="bold" fill="#1e3a8a">slot 1</text>
+      <text x="455" y="238" text-anchor="middle" font-size="11" font-weight="bold" fill="#1e3a8a">slot 2</text>
+      <text x="550" y="238" text-anchor="middle" font-size="11" font-weight="bold" fill="#1e3a8a">slot 3</text>
+      <text x="645" y="238" text-anchor="middle" font-size="11" font-weight="bold" fill="#6b7280">slot 4</text>
+      <text x="740" y="238" text-anchor="middle" font-size="11" font-weight="bold" fill="#6b7280">slot 5</text>
+      <text x="835" y="238" text-anchor="middle" font-size="11" font-weight="bold" fill="#6b7280">slot 6</text>
+      <text x="930" y="238" text-anchor="middle" font-size="11" font-weight="bold" fill="#6b7280">slot 7</text>
+
+      <text x="265" y="260" text-anchor="middle" font-size="9" fill="#1e3a8a">已写</text>
+      <text x="360" y="260" text-anchor="middle" font-size="9" fill="#1e3a8a">已写</text>
+      <text x="455" y="260" text-anchor="middle" font-size="9" fill="#1e3a8a">已写</text>
+      <text x="550" y="260" text-anchor="middle" font-size="9" fill="#1e3a8a">在写</text>
+      <text x="645" y="260" text-anchor="middle" font-size="9" fill="#6b7280">空闲</text>
+      <text x="740" y="260" text-anchor="middle" font-size="9" fill="#6b7280">空闲</text>
+      <text x="835" y="260" text-anchor="middle" font-size="9" fill="#6b7280">空闲</text>
+      <text x="930" y="260" text-anchor="middle" font-size="9" fill="#6b7280">空闲</text>
+
+      <text x="265" y="274" text-anchor="middle" font-size="8" fill="#1e3a8a">chunk[0]</text>
+      <text x="360" y="274" text-anchor="middle" font-size="8" fill="#1e3a8a">chunk[1]</text>
+      <text x="455" y="274" text-anchor="middle" font-size="8" fill="#1e3a8a">chunk[2]</text>
+      <text x="550" y="274" text-anchor="middle" font-size="8" fill="#1e3a8a">chunk[3]</text>
+    </g>
+
+    <!-- Reader label -->
+    <rect x="1015" y="220" width="120" height="60" fill="#dcfce7" stroke="#15803d" stroke-width="1.5" rx="4"/>
+    <text x="1075" y="243" text-anchor="middle" font-size="11" font-weight="bold" fill="#14532d">读者</text>
+    <text x="1075" y="260" text-anchor="middle" font-size="10" fill="#14532d">对端 GPU</text>
+    <text x="1075" y="275" text-anchor="middle" font-size="10" fill="#14532d">(recv 侧)</text>
+
+    <!-- Tail pointer -->
+    <text x="600" y="180" text-anchor="middle" font-size="12" font-weight="bold" fill="#c2410c">tail 当前值 = 4 (= step + 1)</text>
+    <text x="600" y="197" text-anchor="middle" font-size="10" fill="#c2410c">写者完成 slot 3 后 fence + 写 tail（值存储在 tail 计数器中，见下）</text>
+    <line x1="180" y1="208" x2="595" y2="208" stroke="#c2410c" stroke-width="2" marker-end="url(#arr-orange)"/>
+
+    <!-- Head pointer -->
+    <text x="450" y="325" text-anchor="middle" font-size="12" font-weight="bold" fill="#1d4ed8">head 当前值 = 2</text>
+    <text x="450" y="342" text-anchor="middle" font-size="10" fill="#1d4ed8">读者读完 slot 0/1 后写 head 释放（值存储在 head 计数器中，见下）</text>
+    <line x1="180" y1="295" x2="445" y2="295" stroke="#1d4ed8" stroke-width="2" marker-end="url(#arr-blue)"/>
+
+    <line x1="595" y1="220" x2="595" y2="280" stroke="#c2410c" stroke-width="2" stroke-dasharray="3 2"/>
+    <line x1="445" y1="220" x2="445" y2="280" stroke="#1d4ed8" stroke-width="2" stroke-dasharray="3 2"/>
+
+    <!-- Wrap-around indicator -->
+    <path d="M 975 250 Q 1005 250 1005 225 Q 1005 200 975 200 Q 945 200 945 220" fill="none" stroke="#6b7280" stroke-width="1.5" stroke-dasharray="3 2" marker-end="url(#arr)"/>
+    <text x="1015" y="205" font-size="9" fill="#6b7280">step % 8</text>
+    <text x="1015" y="217" font-size="9" fill="#6b7280">回绕</text>
+
+    <!-- ───────── 物理内存视图 ───────── -->
+    <line x1="60" y1="370" x2="1220" y2="370" stroke="#d1d5db" stroke-width="0.8" stroke-dasharray="4 3"/>
+    <text x="50" y="395" font-size="12" font-weight="bold" fill="#374151">物理内存视图（实际占用，数据区 + 同步计数器）</text>
+
+    <!-- Memory layout boxes -->
+    <g>
+      <!-- Data region (collapsed view of 8 slots) -->
+      <rect x="60" y="410" width="780" height="80" fill="#dbeafe" stroke="#1d4ed8" stroke-width="1.5" rx="3"/>
+      <text x="450" y="435" text-anchor="middle" font-size="13" font-weight="bold" fill="#1e3a8a">数据区 buffs[NCCL_STEPS]</text>
+      <text x="450" y="455" text-anchor="middle" font-size="10" fill="#1e3a8a">8 个 slot × chunkSize 字节</text>
+      <text x="450" y="470" text-anchor="middle" font-size="10" fill="#1e3a8a">总大小 = NCCL_STEPS × chunkSize（典型 8 × 512 KB = 4 MB）</text>
+      <text x="450" y="484" text-anchor="middle" font-size="9" fill="#1e3a8a">写者按 slot = step % 8 索引写入；读者按相同规则读取</text>
+
+      <!-- Tail counter -->
+      <rect x="860" y="410" width="170" height="80" fill="#fed7aa" stroke="#c2410c" stroke-width="1.5" rx="3"/>
+      <text x="945" y="435" text-anchor="middle" font-size="13" font-weight="bold" fill="#9a3412">tail 计数器</text>
+      <text x="945" y="455" text-anchor="middle" font-size="10" fill="#9a3412">uint64_t</text>
+      <text x="945" y="470" text-anchor="middle" font-size="10" fill="#9a3412">8 字节</text>
+      <text x="945" y="484" text-anchor="middle" font-size="9" fill="#9a3412">写者推进，读者 spin</text>
+
+      <!-- Head counter -->
+      <rect x="1050" y="410" width="170" height="80" fill="#bfdbfe" stroke="#1d4ed8" stroke-width="1.5" rx="3"/>
+      <text x="1135" y="435" text-anchor="middle" font-size="13" font-weight="bold" fill="#1e3a8a">head 计数器</text>
+      <text x="1135" y="455" text-anchor="middle" font-size="10" fill="#1e3a8a">uint64_t</text>
+      <text x="1135" y="470" text-anchor="middle" font-size="10" fill="#1e3a8a">8 字节</text>
+      <text x="1135" y="484" text-anchor="middle" font-size="9" fill="#1e3a8a">读者推进，写者 spin</text>
+    </g>
+
+    <!-- Memory notes -->
+    <g font-size="10" fill="#374151">
+      <text x="60" y="513">📐 单 ringbuf 总占用 ≈ NCCL_STEPS × chunkSize + 16 字节（同步计数器，可忽略不计）</text>
+      <text x="60" y="530">🧱 tail / head 计数器按 cacheline (64 字节) 对齐，避免写者 / 读者间的 false sharing</text>
+      <text x="60" y="547">🔄 Simple 协议写流程：写 buffs[step%8] → __threadfence_system → 写 tail（对端 spin 看到 tail&gt;step 后读 data → 写 head 释放）</text>
+      <text x="60" y="564">📌 tail / head 单调递增（不取模），用差值判断"已写未读 slot 数"；写满则写者 spin 等 head，空则读者 spin 等 tail</text>
+      <text x="60" y="581">🛡 abortFlag 检查点嵌入 spin 循环——置位时立即 return，避免对端故障导致永久 hang</text>
+    </g>
+  </g>
+
+  <!-- ============================================================ -->
+  <!-- ===== Panel B: 一对相邻 rank 的 ringbuf 配对 ====================== -->
+  <!-- ============================================================ -->
+  <g>
+    <rect x="30" y="630" width="1220" height="440" fill="#ffffff" stroke="#9ca3af" stroke-width="1" rx="6"/>
+    <text x="50" y="660" font-size="14" font-weight="bold" fill="#111827">面板 B · 一对相邻 rank (A, B) 的 ringbuf 配对</text>
+    <text x="50" y="678" font-size="10" fill="#6b7280">channel 单向；每个 channel 在这对 rank 上只有 1 份 ringbuf；nChannels = 2 → 共 2 份</text>
+
+    <!-- Rank A box -->
+    <rect x="60" y="710" width="160" height="320" fill="#fef3c7" stroke="#b45309" stroke-width="2" rx="6"/>
+    <text x="140" y="735" text-anchor="middle" font-size="14" font-weight="bold" fill="#78350f">Rank A</text>
+    <text x="140" y="753" text-anchor="middle" font-size="10" fill="#78350f">(本端 GPU)</text>
+
+    <!-- Rank B box -->
+    <rect x="1060" y="710" width="160" height="320" fill="#dcfce7" stroke="#15803d" stroke-width="2" rx="6"/>
+    <text x="1140" y="735" text-anchor="middle" font-size="14" font-weight="bold" fill="#14532d">Rank B</text>
+    <text x="1140" y="753" text-anchor="middle" font-size="10" fill="#14532d">(对端 GPU)</text>
+
+    <!-- ═════ ch0 group (top): A → B ═════ -->
+    <text x="640" y="785" text-anchor="middle" font-size="12" font-weight="bold" fill="#c2410c">━━━━━━ ch0 前向（ring 中 A.next = B，A 写、B 读）━━━━━━</text>
+
+    <!-- ch0 ringbuf (owner A) -->
+    <g>
+      <rect x="280" y="795" width="720" height="85" fill="#fed7aa" stroke="#c2410c" stroke-width="1.5" rx="4"/>
+      <text x="640" y="817" text-anchor="middle" font-size="12" font-weight="bold" fill="#9a3412">ringbuf-ch0（owner = A，物理 buffer 在 A 端）</text>
+
+      <!-- mini slot row -->
+      <g>
+        <rect x="295" y="830" width="50" height="22" fill="#fdba74" stroke="#9a3412" stroke-width="0.8"/>
+        <rect x="345" y="830" width="50" height="22" fill="#fdba74" stroke="#9a3412" stroke-width="0.8"/>
+        <rect x="395" y="830" width="50" height="22" fill="#fdba74" stroke="#9a3412" stroke-width="0.8"/>
+        <rect x="445" y="830" width="50" height="22" fill="#fdba74" stroke="#9a3412" stroke-width="0.8"/>
+        <rect x="495" y="830" width="50" height="22" fill="#fdba74" stroke="#9a3412" stroke-width="0.8"/>
+        <rect x="545" y="830" width="50" height="22" fill="#fdba74" stroke="#9a3412" stroke-width="0.8"/>
+        <rect x="595" y="830" width="50" height="22" fill="#fdba74" stroke="#9a3412" stroke-width="0.8"/>
+        <rect x="645" y="830" width="50" height="22" fill="#fdba74" stroke="#9a3412" stroke-width="0.8"/>
+        <text x="495" y="846" text-anchor="middle" font-size="9" font-weight="bold" fill="#7c2d12">buffs[0..7]（数据区，8 × chunkSize）</text>
+        <rect x="710" y="830" width="65" height="22" fill="#fdba74" stroke="#9a3412" stroke-width="0.8"/>
+        <text x="742" y="846" text-anchor="middle" font-size="9" fill="#7c2d12">tail u64</text>
+        <rect x="785" y="830" width="65" height="22" fill="#fdba74" stroke="#9a3412" stroke-width="0.8"/>
+        <text x="817" y="846" text-anchor="middle" font-size="9" fill="#7c2d12">head u64</text>
+      </g>
+
+      <text x="640" y="870" text-anchor="middle" font-size="9" fill="#9a3412">B 端：通过 cudaIpcOpenMemHandle / mmap 映射 A 的 buffer → 普通虚拟地址读取，无独立分配</text>
+    </g>
+
+    <!-- ch0 data flow arrow A → B -->
+    <line x1="220" y1="838" x2="280" y2="838" stroke="#c2410c" stroke-width="2.5" marker-end="url(#arr-orange)"/>
+    <text x="250" y="828" text-anchor="middle" font-size="9" fill="#c2410c">写</text>
+    <line x1="1000" y1="838" x2="1060" y2="838" stroke="#c2410c" stroke-width="2.5" marker-end="url(#arr-orange)"/>
+    <text x="1030" y="828" text-anchor="middle" font-size="9" fill="#c2410c">读</text>
+
+    <!-- ═════ ch1 group (bottom): B → A ═════ -->
+    <text x="640" y="910" text-anchor="middle" font-size="12" font-weight="bold" fill="#7c3aed">━━━━━━ ch1 反向（ring 反转后 B.next = A，B 写、A 读）━━━━━━</text>
+
+    <!-- ch1 ringbuf (owner B) -->
+    <g>
+      <rect x="280" y="920" width="720" height="85" fill="#ede9fe" stroke="#7c3aed" stroke-width="1.5" rx="4"/>
+      <text x="640" y="942" text-anchor="middle" font-size="12" font-weight="bold" fill="#5b21b6">ringbuf-ch1（owner = B，物理 buffer 在 B 端）</text>
+
+      <g>
+        <rect x="295" y="955" width="50" height="22" fill="#ddd6fe" stroke="#5b21b6" stroke-width="0.8"/>
+        <rect x="345" y="955" width="50" height="22" fill="#ddd6fe" stroke="#5b21b6" stroke-width="0.8"/>
+        <rect x="395" y="955" width="50" height="22" fill="#ddd6fe" stroke="#5b21b6" stroke-width="0.8"/>
+        <rect x="445" y="955" width="50" height="22" fill="#ddd6fe" stroke="#5b21b6" stroke-width="0.8"/>
+        <rect x="495" y="955" width="50" height="22" fill="#ddd6fe" stroke="#5b21b6" stroke-width="0.8"/>
+        <rect x="545" y="955" width="50" height="22" fill="#ddd6fe" stroke="#5b21b6" stroke-width="0.8"/>
+        <rect x="595" y="955" width="50" height="22" fill="#ddd6fe" stroke="#5b21b6" stroke-width="0.8"/>
+        <rect x="645" y="955" width="50" height="22" fill="#ddd6fe" stroke="#5b21b6" stroke-width="0.8"/>
+        <text x="495" y="971" text-anchor="middle" font-size="9" font-weight="bold" fill="#4c1d95">buffs[0..7]（数据区，8 × chunkSize）</text>
+        <rect x="710" y="955" width="65" height="22" fill="#ddd6fe" stroke="#5b21b6" stroke-width="0.8"/>
+        <text x="742" y="971" text-anchor="middle" font-size="9" fill="#4c1d95">tail u64</text>
+        <rect x="785" y="955" width="65" height="22" fill="#ddd6fe" stroke="#5b21b6" stroke-width="0.8"/>
+        <text x="817" y="971" text-anchor="middle" font-size="9" fill="#4c1d95">head u64</text>
+      </g>
+
+      <text x="640" y="995" text-anchor="middle" font-size="9" fill="#5b21b6">A 端：通过 cudaIpcOpenMemHandle / mmap 映射 B 的 buffer → 普通虚拟地址读取，无独立分配</text>
+    </g>
+
+    <!-- ch1 data flow arrow B → A -->
+    <line x1="280" y1="963" x2="220" y2="963" stroke="#7c3aed" stroke-width="2.5" marker-end="url(#arr-purple)"/>
+    <text x="250" y="953" text-anchor="middle" font-size="9" fill="#7c3aed">读</text>
+    <line x1="1060" y1="963" x2="1000" y2="963" stroke="#7c3aed" stroke-width="2.5" marker-end="url(#arr-purple)"/>
+    <text x="1030" y="953" text-anchor="middle" font-size="9" fill="#7c3aed">写</text>
+
+    <!-- Bottom summary -->
+    <text x="50" y="1035" font-size="10" fill="#374151">📊 每对 (A, B)：2 份 ringbuf（每个 channel 一份，方向相反）；A 持有 ringbuf-ch0、B 持有 ringbuf-ch1</text>
+    <text x="50" y="1052" font-size="10" fill="#374151">🔁 channel 是单向概念：ch0 与 ch1 通过 ring 方向相反共同占用 PBLink 两个物理方向，无需为单个 channel 分配双向 buffer</text>
+  </g>
+
+  <!-- ============================================================ -->
+  <!-- ===== Panel C: 全节点 ringbuf 总量 ============================== -->
+  <!-- ============================================================ -->
+  <g>
+    <rect x="30" y="1100" width="800" height="440" fill="#ffffff" stroke="#9ca3af" stroke-width="1" rx="6"/>
+    <text x="50" y="1130" font-size="14" font-weight="bold" fill="#111827">面板 C · 全节点视图（N = 4 环示例）</text>
+    <text x="50" y="1148" font-size="10" fill="#6b7280">环上每条邻接边：2 份 ringbuf（ch0 前向 + ch1 反向）；4 条边共 8 份</text>
+
+    <g>
+      <!-- 4 ranks -->
+      <circle cx="415" cy="1220" r="40" fill="#fef3c7" stroke="#b45309" stroke-width="2"/>
+      <text x="415" y="1225" text-anchor="middle" font-size="14" font-weight="bold" fill="#78350f">rank 0</text>
+
+      <circle cx="600" cy="1350" r="40" fill="#fef3c7" stroke="#b45309" stroke-width="2"/>
+      <text x="600" y="1355" text-anchor="middle" font-size="14" font-weight="bold" fill="#78350f">rank 1</text>
+
+      <circle cx="415" cy="1470" r="40" fill="#fef3c7" stroke="#b45309" stroke-width="2"/>
+      <text x="415" y="1475" text-anchor="middle" font-size="14" font-weight="bold" fill="#78350f">rank 2</text>
+
+      <circle cx="230" cy="1350" r="40" fill="#fef3c7" stroke="#b45309" stroke-width="2"/>
+      <text x="230" y="1355" text-anchor="middle" font-size="14" font-weight="bold" fill="#78350f">rank 3</text>
+
+      <!-- Edges -->
+      <line x1="447" y1="1244" x2="568" y2="1326" stroke="#374151" stroke-width="2"/>
+      <text x="538" y="1260" font-size="10" font-weight="bold" fill="#c2410c">ch0: 0→1</text>
+      <text x="538" y="1275" font-size="10" font-weight="bold" fill="#7c3aed">ch1: 1→0</text>
+      <text x="538" y="1290" font-size="9" fill="#6b7280">= 2 份 ringbuf</text>
+
+      <line x1="568" y1="1374" x2="447" y2="1446" stroke="#374151" stroke-width="2"/>
+      <text x="538" y="1413" font-size="10" font-weight="bold" fill="#c2410c">ch0: 1→2</text>
+      <text x="538" y="1428" font-size="10" font-weight="bold" fill="#7c3aed">ch1: 2→1</text>
+      <text x="538" y="1443" font-size="9" fill="#6b7280">= 2 份 ringbuf</text>
+
+      <line x1="383" y1="1446" x2="262" y2="1374" stroke="#374151" stroke-width="2"/>
+      <text x="240" y="1413" font-size="10" font-weight="bold" fill="#c2410c">ch0: 2→3</text>
+      <text x="240" y="1428" font-size="10" font-weight="bold" fill="#7c3aed">ch1: 3→2</text>
+      <text x="240" y="1443" font-size="9" fill="#6b7280">= 2 份 ringbuf</text>
+
+      <line x1="262" y1="1326" x2="383" y2="1244" stroke="#374151" stroke-width="2"/>
+      <text x="240" y="1260" font-size="10" font-weight="bold" fill="#c2410c">ch0: 3→0</text>
+      <text x="240" y="1275" font-size="10" font-weight="bold" fill="#7c3aed">ch1: 0→3</text>
+      <text x="240" y="1290" font-size="9" fill="#6b7280">= 2 份 ringbuf</text>
+
+      <!-- Center summary -->
+      <rect x="350" y="1325" width="130" height="60" fill="#f1f5f9" stroke="#475569" stroke-width="1.5" rx="4"/>
+      <text x="415" y="1347" text-anchor="middle" font-size="11" font-weight="bold" fill="#1e293b">N = 4 环</text>
+      <text x="415" y="1365" text-anchor="middle" font-size="10" fill="#475569">4 个 rank × 2 channel</text>
+      <text x="415" y="1379" text-anchor="middle" font-size="10" fill="#475569">= 8 份 ringbuf</text>
+    </g>
+
+    <!-- Formula -->
+    <rect x="60" y="1500" width="740" height="32" fill="#fef9c3" stroke="#a16207" stroke-width="1.5" rx="4"/>
+    <text x="80" y="1520" font-size="11" font-weight="bold" fill="#713f12">总公式：</text>
+    <text x="160" y="1520" font-size="12" fill="#713f12" font-family="'Consolas','SF Mono','Menlo',monospace">ringbuf 总数 = nranks × nChannels</text>
+    <text x="500" y="1520" font-size="10" fill="#713f12">（每个 rank 在每个 channel 持有 1 份；N=4, nChannels=2 → 8 份）</text>
+  </g>
+
+  <!-- ============================================================ -->
+  <!-- ===== Panel D: P2P vs SHM 物理后端对比 ========================== -->
+  <!-- ============================================================ -->
+  <g>
+    <rect x="850" y="1100" width="400" height="440" fill="#ffffff" stroke="#9ca3af" stroke-width="1" rx="6"/>
+    <text x="870" y="1130" font-size="14" font-weight="bold" fill="#111827">面板 D · 物理后端对比</text>
+    <text x="870" y="1148" font-size="10" fill="#6b7280">同一份"buffs + tail + head"ABI，两种后端实现</text>
+
+    <g>
+      <rect x="870" y="1165" width="360" height="170" fill="#dbeafe" stroke="#1d4ed8" stroke-width="1.5" rx="4"/>
+      <text x="1050" y="1186" text-anchor="middle" font-size="12" font-weight="bold" fill="#1e3a8a">P2P (主路径)</text>
+      <text x="1050" y="1201" text-anchor="middle" font-size="9" fill="#1e3a8a">cudaDeviceCanAccessPeer = true</text>
+
+      <text x="885" y="1222" font-size="10" font-weight="bold" fill="#1e3a8a">本端分配：</text>
+      <text x="885" y="1238" font-size="9" fill="#1e3a8a" font-family="'Consolas','SF Mono','Menlo',monospace">cudaMalloc(buffSize)</text>
+      <text x="885" y="1252" font-size="9" fill="#1e3a8a" font-family="'Consolas','SF Mono','Menlo',monospace">cudaIpcGetMemHandle()</text>
+
+      <text x="885" y="1273" font-size="10" font-weight="bold" fill="#1e3a8a">交换：</text>
+      <text x="885" y="1289" font-size="9" fill="#1e3a8a">64 字节 IPC handle 经 bootstrap 传递</text>
+
+      <text x="885" y="1308" font-size="10" font-weight="bold" fill="#1e3a8a">对端映射：</text>
+      <text x="885" y="1324" font-size="9" fill="#1e3a8a" font-family="'Consolas','SF Mono','Menlo',monospace">cudaIpcOpenMemHandle() → 本地 GPU VA</text>
+    </g>
+
+    <g>
+      <rect x="870" y="1350" width="360" height="170" fill="#fef3c7" stroke="#b45309" stroke-width="1.5" rx="4"/>
+      <text x="1050" y="1371" text-anchor="middle" font-size="12" font-weight="bold" fill="#78350f">SHM (备用路径)</text>
+      <text x="1050" y="1386" text-anchor="middle" font-size="9" fill="#78350f">cudaDeviceCanAccessPeer = false 时降级</text>
+
+      <text x="885" y="1407" font-size="10" font-weight="bold" fill="#78350f">本端分配：</text>
+      <text x="885" y="1423" font-size="9" fill="#78350f" font-family="'Consolas','SF Mono','Menlo',monospace">shm_open + ftruncate(buffSize)</text>
+      <text x="885" y="1437" font-size="9" fill="#78350f" font-family="'Consolas','SF Mono','Menlo',monospace">mmap → 本地 host VA</text>
+
+      <text x="885" y="1458" font-size="10" font-weight="bold" fill="#78350f">交换：</text>
+      <text x="885" y="1474" font-size="9" fill="#78350f">SHM 路径字符串经 bootstrap 传递</text>
+
+      <text x="885" y="1493" font-size="10" font-weight="bold" fill="#78350f">对端映射：</text>
+      <text x="885" y="1509" font-size="9" fill="#78350f" font-family="'Consolas','SF Mono','Menlo',monospace">open + mmap(对端路径) → 同物理页</text>
+    </g>
+  </g>
+</svg>

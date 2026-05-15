@@ -1,0 +1,193 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 920" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', 'Helvetica Neue', Arial, sans-serif">
+  <rect width="1400" height="920" fill="#fafafa"/>
+
+  <!-- ===== Title ===== -->
+  <text x="700" y="32" text-anchor="middle" font-size="20" font-weight="bold" fill="#1f2937">AllReduce 库 — 分层架构与模块关系</text>
+  <text x="700" y="52" text-anchor="middle" font-size="12" fill="#4b5563">(单机多卡 · Ring 算法 · Simple 协议)</text>
+
+  <!-- ===== 1. API Layer ===== -->
+  <g>
+    <rect x="20" y="65" width="100" height="130" fill="#fff7ed" stroke="#ea580c" stroke-width="2" rx="6"/>
+    <text x="70" y="125" text-anchor="middle" font-size="15" font-weight="bold" fill="#7c2d12">API 层</text>
+    <text x="70" y="150" text-anchor="middle" font-size="10" fill="#7c2d12">C ABI 入口</text>
+    <text x="70" y="166" text-anchor="middle" font-size="10" fill="#7c2d12">9 个公开符号</text>
+
+    <rect x="140" y="65" width="1080" height="130" fill="#fff7ed" stroke="#fdba74" stroke-width="1.5" rx="6"/>
+
+    <rect x="160" y="90" width="280" height="80" fill="#fdba74" rx="4"/>
+    <text x="300" y="113" text-anchor="middle" font-size="13" font-weight="bold" fill="#7c2d12">生命周期 (3)</text>
+    <text x="300" y="133" text-anchor="middle" font-size="11" fill="#7c2d12">ncclCommInit</text>
+    <text x="300" y="148" text-anchor="middle" font-size="11" fill="#7c2d12">ncclCommDestroy</text>
+    <text x="300" y="163" text-anchor="middle" font-size="11" fill="#7c2d12">ncclCommAbort</text>
+
+    <rect x="455" y="90" width="280" height="80" fill="#fdba74" rx="4"/>
+    <text x="595" y="120" text-anchor="middle" font-size="13" font-weight="bold" fill="#7c2d12">集合通信 (1)</text>
+    <text x="595" y="148" text-anchor="middle" font-size="12" fill="#7c2d12">ncclAllReduce</text>
+
+    <rect x="750" y="90" width="450" height="80" fill="#fdba74" rx="4"/>
+    <text x="975" y="113" text-anchor="middle" font-size="13" font-weight="bold" fill="#7c2d12">查询 / 错误 (5)</text>
+    <text x="975" y="133" text-anchor="middle" font-size="10" fill="#7c2d12">ncclCommCount   ·   ncclCommUserRank</text>
+    <text x="975" y="148" text-anchor="middle" font-size="10" fill="#7c2d12">ncclCommGetAsyncError</text>
+    <text x="975" y="163" text-anchor="middle" font-size="10" fill="#7c2d12">ncclGetErrorString   ·   ncclGetVersion</text>
+  </g>
+
+  <!-- ===== 2. Scheduler Layer ===== -->
+  <g>
+    <rect x="20" y="210" width="100" height="110" fill="#fffbeb" stroke="#d97706" stroke-width="2" rx="6"/>
+    <text x="70" y="260" text-anchor="middle" font-size="15" font-weight="bold" fill="#78350f">调度层</text>
+    <text x="70" y="283" text-anchor="middle" font-size="10" fill="#78350f">单次 AllReduce 调度</text>
+
+    <rect x="140" y="210" width="1080" height="110" fill="#fffbeb" stroke="#fcd34d" stroke-width="1.5" rx="6"/>
+
+    <rect x="160" y="230" width="240" height="70" fill="#fcd34d" rx="4"/>
+    <text x="280" y="272" text-anchor="middle" font-size="14" font-weight="bold" fill="#78350f">enqueueCheck</text>
+
+    <rect x="415" y="230" width="240" height="70" fill="#fcd34d" rx="4"/>
+    <text x="535" y="272" text-anchor="middle" font-size="14" font-weight="bold" fill="#78350f">pickChunkSize</text>
+
+    <rect x="670" y="230" width="240" height="70" fill="#fcd34d" rx="4"/>
+    <text x="790" y="272" text-anchor="middle" font-size="14" font-weight="bold" fill="#78350f">setupCollKernel</text>
+
+    <rect x="925" y="230" width="280" height="70" fill="#fcd34d" rx="4"/>
+    <text x="1065" y="272" text-anchor="middle" font-size="14" font-weight="bold" fill="#78350f">launchKernel</text>
+  </g>
+
+  <!-- ===== 3. GPU Kernel Layer ===== -->
+  <g>
+    <rect x="20" y="335" width="100" height="150" fill="#eff6ff" stroke="#2563eb" stroke-width="2" rx="6"/>
+    <text x="70" y="405" text-anchor="middle" font-size="15" font-weight="bold" fill="#1e3a8a">GPU 内核层</text>
+    <text x="70" y="428" text-anchor="middle" font-size="10" fill="#1e3a8a">GPU kernel</text>
+    <text x="70" y="446" text-anchor="middle" font-size="10" fill="#1e3a8a">+ 通信原语 + reduce</text>
+
+    <rect x="140" y="335" width="1080" height="150" fill="#eff6ff" stroke="#93c5fd" stroke-width="1.5" rx="6"/>
+
+    <rect x="160" y="355" width="280" height="110" fill="#93c5fd" rx="4"/>
+    <text x="300" y="395" text-anchor="middle" font-size="13" font-weight="bold" fill="#1e3a8a">allreduce_ring_simple.cu</text>
+    <text x="300" y="420" text-anchor="middle" font-size="10" fill="#1e3a8a">Ring 两阶段循环 kernel</text>
+    <text x="300" y="438" text-anchor="middle" font-size="10" fill="#1e3a8a">Sum × float32 模板</text>
+
+    <rect x="455" y="355" width="220" height="110" fill="#93c5fd" rx="4"/>
+    <text x="565" y="395" text-anchor="middle" font-size="13" font-weight="bold" fill="#1e3a8a">prims_simple.h</text>
+    <text x="565" y="420" text-anchor="middle" font-size="10" fill="#1e3a8a">Simple 协议搬运</text>
+    <text x="565" y="438" text-anchor="middle" font-size="10" fill="#1e3a8a">write + fence + tail</text>
+
+    <rect x="690" y="355" width="220" height="110" fill="#93c5fd" rx="4"/>
+    <text x="800" y="395" text-anchor="middle" font-size="13" font-weight="bold" fill="#1e3a8a">reduce_kernel.h</text>
+    <text x="800" y="420" text-anchor="middle" font-size="10" fill="#1e3a8a">FuncSum / float32</text>
+    <text x="800" y="438" text-anchor="middle" font-size="10" fill="#1e3a8a">模板可扩 op / dtype</text>
+
+    <rect x="925" y="355" width="280" height="110" fill="#93c5fd" rx="4"/>
+    <text x="1065" y="395" text-anchor="middle" font-size="13" font-weight="bold" fill="#1e3a8a">common_kernel.h</text>
+    <text x="1065" y="420" text-anchor="middle" font-size="10" fill="#1e3a8a">vector load / store</text>
+    <text x="1065" y="438" text-anchor="middle" font-size="10" fill="#1e3a8a">__threadfence_system</text>
+  </g>
+
+  <!-- ===== 4. Transport Layer ===== -->
+  <g>
+    <rect x="20" y="500" width="100" height="130" fill="#f0fdf4" stroke="#16a34a" stroke-width="2" rx="6"/>
+    <text x="70" y="560" text-anchor="middle" font-size="15" font-weight="bold" fill="#14532d">传输层</text>
+    <text x="70" y="583" text-anchor="middle" font-size="10" fill="#14532d">peer 间数据通路</text>
+
+    <rect x="140" y="500" width="1080" height="130" fill="#f0fdf4" stroke="#86efac" stroke-width="1.5" rx="6"/>
+
+    <rect x="160" y="520" width="330" height="90" fill="#86efac" rx="4"/>
+    <text x="325" y="555" text-anchor="middle" font-size="13" font-weight="bold" fill="#14532d">selectTransport</text>
+    <text x="325" y="582" text-anchor="middle" font-size="10" fill="#14532d">优先 P2P → 降级 SHM</text>
+
+    <rect x="510" y="520" width="330" height="90" fill="#86efac" rx="4"/>
+    <text x="675" y="555" text-anchor="middle" font-size="13" font-weight="bold" fill="#14532d">P2P (主路径)</text>
+    <text x="675" y="582" text-anchor="middle" font-size="10" fill="#14532d">CUDA IPC + PBLink</text>
+
+    <rect x="860" y="520" width="330" height="90" fill="#86efac" rx="4"/>
+    <text x="1025" y="555" text-anchor="middle" font-size="13" font-weight="bold" fill="#14532d">SHM (备用路径)</text>
+    <text x="1025" y="582" text-anchor="middle" font-size="10" fill="#14532d">/dev/shm mmap</text>
+  </g>
+
+  <!-- ===== 5. Assembly Layer (graph & topology + base) ===== -->
+  <g>
+    <rect x="20" y="645" width="100" height="220" fill="#faf5ff" stroke="#9333ea" stroke-width="2" rx="6"/>
+    <text x="70" y="745" text-anchor="middle" font-size="15" font-weight="bold" fill="#4c1d95">装配层</text>
+    <text x="70" y="768" text-anchor="middle" font-size="10" fill="#4c1d95">仅 init 期活跃</text>
+    <text x="70" y="785" text-anchor="middle" font-size="10" fill="#4c1d95">热路径不参与</text>
+
+    <rect x="140" y="645" width="1080" height="220" fill="#faf5ff" stroke="#c4b5fd" stroke-width="1.5" rx="6"/>
+
+    <text x="158" y="680" font-size="10" font-style="italic" fill="#6d28d9">— 拓扑 / 算法图构造</text>
+
+    <rect x="160" y="690" width="330" height="75" fill="#c4b5fd" rx="4"/>
+    <text x="325" y="720" text-anchor="middle" font-size="13" font-weight="bold" fill="#4c1d95">topo</text>
+    <text x="325" y="745" text-anchor="middle" font-size="10" fill="#4c1d95">可达性扫描</text>
+
+    <rect x="510" y="690" width="330" height="75" fill="#c4b5fd" rx="4"/>
+    <text x="675" y="720" text-anchor="middle" font-size="13" font-weight="bold" fill="#4c1d95">search</text>
+    <text x="675" y="745" text-anchor="middle" font-size="10" fill="#4c1d95">按 busId 排序成环</text>
+
+    <rect x="860" y="690" width="330" height="75" fill="#c4b5fd" rx="4"/>
+    <text x="1025" y="720" text-anchor="middle" font-size="13" font-weight="bold" fill="#4c1d95">connect</text>
+    <text x="1025" y="745" text-anchor="middle" font-size="10" fill="#4c1d95">建连 · 填 channels</text>
+
+    <text x="158" y="785" font-size="10" font-style="italic" fill="#6d28d9">— 运行时基础</text>
+
+    <rect x="160" y="795" width="330" height="60" fill="#c4b5fd" rx="4"/>
+    <text x="325" y="820" text-anchor="middle" font-size="13" font-weight="bold" fill="#4c1d95">bootstrap</text>
+    <text x="325" y="842" text-anchor="middle" font-size="10" fill="#4c1d95">文件 / UDS 会合</text>
+
+    <rect x="510" y="795" width="330" height="60" fill="#c4b5fd" rx="4"/>
+    <text x="675" y="820" text-anchor="middle" font-size="13" font-weight="bold" fill="#4c1d95">comm 初始化</text>
+    <text x="675" y="842" text-anchor="middle" font-size="10" fill="#4c1d95">状态机编排</text>
+
+    <rect x="860" y="795" width="330" height="60" fill="#c4b5fd" rx="4"/>
+    <text x="1025" y="820" text-anchor="middle" font-size="13" font-weight="bold" fill="#4c1d95">channel</text>
+    <text x="1025" y="842" text-anchor="middle" font-size="10" fill="#4c1d95">channel 创建与管理</text>
+  </g>
+
+  <!-- ===== Right vertical column: cross-cutting concerns ===== -->
+  <g>
+    <rect x="1240" y="65" width="140" height="800" fill="#ecfeff" stroke="#0891b2" stroke-width="2" rx="6"/>
+    <text x="1310" y="92" text-anchor="middle" font-size="13" font-weight="bold" fill="#164e63">跨层服务</text>
+
+    <rect x="1260" y="110" width="100" height="100" fill="#67e8f9" rx="4"/>
+    <text x="1310" y="145" text-anchor="middle" font-size="12" font-weight="bold" fill="#164e63">ringbuf 协议</text>
+    <text x="1310" y="170" text-anchor="middle" font-size="9" fill="#164e63">head/tail 无锁推进</text>
+    <text x="1310" y="186" text-anchor="middle" font-size="9" fill="#164e63">NCCL_STEPS = 8</text>
+
+    <rect x="1260" y="222" width="100" height="86" fill="#67e8f9" rx="4"/>
+    <text x="1310" y="258" text-anchor="middle" font-size="12" font-weight="bold" fill="#164e63">CUDA stream</text>
+    <text x="1310" y="282" text-anchor="middle" font-size="9" fill="#164e63">完成语义由 stream 提供</text>
+
+    <rect x="1260" y="320" width="100" height="90" fill="#67e8f9" rx="4"/>
+    <text x="1310" y="355" text-anchor="middle" font-size="12" font-weight="bold" fill="#164e63">异常逃生</text>
+    <text x="1310" y="378" text-anchor="middle" font-size="9" fill="#164e63">fatalError</text>
+    <text x="1310" y="394" text-anchor="middle" font-size="9" fill="#164e63">abortFlag</text>
+
+    <rect x="1260" y="422" width="100" height="86" fill="#67e8f9" rx="4"/>
+    <text x="1310" y="455" text-anchor="middle" font-size="12" font-weight="bold" fill="#164e63">日志</text>
+    <text x="1310" y="478" text-anchor="middle" font-size="9" fill="#164e63">NCCL_DEBUG</text>
+    <text x="1310" y="494" text-anchor="middle" font-size="9" fill="#164e63">WARN / INFO / TRACE</text>
+
+    <rect x="1260" y="520" width="100" height="80" fill="#a5f3fc" rx="4"/>
+    <text x="1310" y="555" text-anchor="middle" font-size="12" font-weight="bold" fill="#164e63">NVTX</text>
+    <text x="1310" y="578" text-anchor="middle" font-size="9" fill="#164e63">FUNC_RANGE</text>
+
+    <rect x="1260" y="612" width="100" height="90" fill="#a5f3fc" rx="4"/>
+    <text x="1310" y="645" text-anchor="middle" font-size="12" font-weight="bold" fill="#164e63">环境变量</text>
+    <text x="1310" y="668" text-anchor="middle" font-size="9" fill="#164e63">NCCL_DEBUG</text>
+    <text x="1310" y="684" text-anchor="middle" font-size="9" fill="#164e63">NCCL_P2P_DISABLE</text>
+    <text x="1310" y="700" text-anchor="middle" font-size="9" fill="#164e63">NCCL_SHM_DISABLE</text>
+
+    <rect x="1260" y="714" width="100" height="80" fill="#a5f3fc" rx="4"/>
+    <text x="1310" y="748" text-anchor="middle" font-size="12" font-weight="bold" fill="#164e63">拓扑导出</text>
+    <text x="1310" y="772" text-anchor="middle" font-size="9" fill="#164e63">TOPO_DUMP_FILE</text>
+  </g>
+
+  <!-- ===== Dashed dividers between layers ===== -->
+  <line x1="20" y1="202" x2="1220" y2="202" stroke="#9ca3af" stroke-width="1" stroke-dasharray="6 4"/>
+  <line x1="20" y1="327" x2="1220" y2="327" stroke="#9ca3af" stroke-width="1" stroke-dasharray="6 4"/>
+  <line x1="20" y1="492" x2="1220" y2="492" stroke="#9ca3af" stroke-width="1" stroke-dasharray="6 4"/>
+  <line x1="20" y1="637" x2="1220" y2="637" stroke="#9ca3af" stroke-width="1" stroke-dasharray="6 4"/>
+
+  <!-- ===== Caption ===== -->
+  <text x="20" y="890" font-size="11" fill="#666">数据流方向:API ↓ 调度层 ↓ GPU 内核层 ↔ 传输层(运行期数据通路) — 装配层仅 commInit 期活跃 — 右侧跨层服务伴随 communicator 全生命周期</text>
+  <text x="20" y="908" font-size="11" fill="#666">色块对照:🟠 API 层  🟡 调度层  🔵 GPU 内核层  🟢 传输层  🟣 装配层  🔵 跨层服务   ·   设计原则:装配重 / 热路径轻 · 三层正交组合 · communicator 不可变</text>
+</svg>
