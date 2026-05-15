@@ -231,5 +231,5 @@
 
   <!-- ===== Caption ===== -->
   <text x="20" y="890" font-size="11" fill="#666">数据流方向:API ↓ 调度层 ↓ GPU 内核层 ↔ 传输层(运行期数据通路) — 装配层仅 commInit 期活跃 — 右侧跨层服务伴随 communicator 全生命周期</text>
-  <text x="20" y="908" font-size="11" fill="#666">色块对照:🟠 API 层  🟡 调度层  🔵 GPU 内核层  🟢 传输层  🟣 装配层  🔵 跨层服务   ·   设计原则:装配重 / 热路径轻 · 调度器投递后退出、不参与后续同步 · communicator 不可变</text>
+  <text x="20" y="908" font-size="11" fill="#666">色块对照:🟠 API 层  🟡 调度层  🔵 GPU 内核层  🟢 传输层  🟣 装配层  🔵 跨层服务   ·   设计原则:装配重 / 热路径轻 · 三层正交组合 · communicator 不可变</text>
 </svg>

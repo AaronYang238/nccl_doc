@@ -58,7 +58,7 @@
 |---|---|---|
 | **rank** | 一个参与通信的 GPU 进程 / 线程 | §1.4 |
 | **communicator** | 一组 rank 的通信上下文，不可变句柄 | §3.1 |
-| **channel** | 一个 GPU thread block 承载的并行通道，多 channel 并发吃带宽 | §5.2 (P3) |
+| **channel** | 一个 GPU thread block 承载的并行通道，多 channel 并发吃带宽 | §6.3.2 |
 | **chunk** | Ring 算法中数据被切分的单位（共 N 份）| §1.4 |
 | **ringbuf** | channel 上的环形缓冲（slot 数 = NCCL_STEPS = 8）| §6.3.2 |
 | **ringbuf head / tail** | 环形缓冲的读 / 写游标，写者推 tail、读者推 head；无锁推进——运行期 GPU 与 GPU 之间的同步机制 | §5.4 |
@@ -78,7 +78,7 @@
 
 | ID | 需求 | 用户视角 |
 |---|---|---|
-| F1 | Communicator 生命周期 | `commInit(comm, nranks, rank)` / `commDestroy(comm)` / `commAbort(comm)` |
+| F1 | Communicator 生命周期 | `commInit(comm, nranks, rank, rendezvousPath)` / `commDestroy(comm)` / `commAbort(comm)` |
 | F2 | AllReduce 原语 | `allReduce(sendbuf, recvbuf, count, dtype, op, comm, stream)` |
 | F3 | 装配期拓扑发现 | 自动识别 GPU 间 NVLink / PCIe / IPC 可达性 |
 | F4 | 异步错误轮询 | `commGetAsyncError(comm, &err)` |
@@ -182,9 +182,7 @@
 | # | 原则 | 含义 |
 |---|---|---|
 | P1 | **装配重 / 热路径轻** | 拓扑发现、Ring 构造、IPC 建连一次性在 `commInit` 完成；每次 `ncclAllReduce` 调用只查表 + launch kernel |
-| P2 | **调度器一次性投递，不参与后续同步** | 调度器写完工作描述符并 launch kernel 后立即返回；GPU 内核自行沿 ringbuf 的 head/tail 计数器推进，host 不再介入 |
-| P3 | **三层正交组合（Channel × Ring × Simple）** | 多 channel 并行吃满 NVLink；Ring 算法与 Simple 协议互不耦合、可独立替换 |
-| P4 | **Communicator 不可变** | 创建即固定 rank 集合；失败即整体作废，不支持动态拆分 |
+| P2 | **Communicator 不可变** | 创建即固定 rank 集合；失败即整体作废，不支持动态拆分 |
 
 ### 5.3 分层调用关系（精简视图）
 
@@ -206,7 +204,7 @@ flowchart TB
 ```
 
 - **粗箭头**（`==>`）= 每次 AllReduce 调用都会走的同步链路：API → 调度 → GPU 内核。
-- **细双向箭头**（`<-->`）= 运行期数据通路：GPU 内核与传输层通过 ringbuf 的 head/tail 计数器自行推进，**调度器投递后即退出、不再介入**（P2）。
+- **细双向箭头**（`<-->`）= 运行期数据通路：GPU 内核与传输层通过 ringbuf 的 head/tail 计数器读写远端 buffer。
 - **虚线**（`-.->`）= 仅在 `commInit` 时触发一次：装配层完成拓扑、Ring 构造、建连后，运行期不再活跃（P1）。
 
 > 本概设文档与上游工业级 NCCL 的章节、模块对应关系，统一在 §11 "与上游 NCCL 详设的对应表" 中列出，便于已熟悉 NCCL 的读者查阅；初次阅读者可直接跳过。
@@ -254,35 +252,75 @@ flowchart TB
 
 #### 6.3.2 device 模块
 
-- **职责**：GPU kernel 实现 Ring AllReduce 的两阶段循环。
+- **职责**：GPU kernel 实现 Ring AllReduce 的两阶段流水。
 - **模板维度**：`AllReduce × Ring × Simple × Sum × float32`（先一组）；后续按需扩展 dtype / op。
 - **执行单元映射**：
-  - 一个 GPU thread block = 一个 channel
-  - 多 channel 并发以吃满 NVLink 带宽
-  - block 内多 thread 协作搬运 chunk 与做 reduce
+  - 一个 GPU thread block = 一个 channel；多 channel 并发以吃满 NVLink 带宽
+  - 每个 channel 处理 `1/nChannels` 的数据，channel 内部再按 Ring 切成 `nRanks` 个 chunk
+  - block 内多 thread 协作搬运 chunk 并做 reduce
+- **关键步骤结构**：Ring AllReduce 每轮共 **2N-1 次原语调用**，对应五种步骤类型——
+
+| 阶段 | 步骤 | 原语 | 说明 |
+|---|---|---|---|
+| Reduce-Scatter | step 0 | `send` | 只发送本 rank 的初始 chunk，不接收 |
+| Reduce-Scatter | step 1 ~ N-2 | `recvReduceSend` | 接收 + 累加到 ringbuf + 转发；**不写 output** |
+| 转折 | step N-1 | `recvReduceCopySend` | 接收 + 最后一次累加 + 写 output + 转发 |
+| All-Gather | step N ~ 2N-3 | `recvCopySend` | 接收 + 写 output + 转发 |
+| All-Gather | step 2N-2 | `recv` | 只接收 + 写 output，**不再转发** |
+
 - **kernel 概念性伪代码**：
 
-```
-__global__ ncclKernel_AllReduce_Ring_Simple_Sum_f32(...) {
-  int bid = blockIdx.x;                // channel id
-  int rank = devComm->rank, N = devComm->nRanks;
-  int nChunks = N;                     // 切成 N 份
+```c
+__global__ void ncclKernel_AllReduce_Ring_Simple_Sum_f32(ncclWorkElem* args) {
+  int bid       = blockIdx.x;                  // channel id
+  int nChannels = args->nChannels;
+  int rank      = ncclShmem.comm.rank;
+  int N         = ncclShmem.comm.nRanks;
+  int ringIx    = rank;                        // 单 Ring 简化:ringIx == rank
+  size_t size   = args->count;                 // 总元素数
+  size_t chunkSize = args->chunkSize;          // 装配期查表确定
+  size_t loopSize  = (size_t)nChannels * N * chunkSize;
 
-  // 阶段 1: Reduce-Scatter (N-1 步)
-  for (int step = 0; step < N - 1; step++) {
-    int sendIdx = (rank - step + N) % N;
-    int recvIdx = (rank - step - 1 + N) % N;
-    prims_simple.recvReduceCopySend(
-      input + recvIdx * chunkSize,
-      output + sendIdx * chunkSize,
-      chunkSize);
-  }
+  prims_simple<Sum, float> prims(
+    /*prev=*/(rank + N - 1) % N,
+    /*next=*/(rank + 1) % N,
+    args->sendbuff, args->recvbuff);
 
-  // 阶段 2: All-Gather (N-1 步)
-  for (int step = 0; step < N - 1; step++) {
-    int idx = (rank - step + 1 + N) % N;
-    prims_simple.directRecvCopySend(
-      output + idx * chunkSize, chunkSize);
+  // 外层:大数据量分片处理,每轮处理 nChannels × N × chunkSize 元素
+  for (size_t gridOffset = 0; gridOffset < size; gridOffset += loopSize) {
+    auto offsetOf = [&](int chunk) -> size_t {
+      return gridOffset + (size_t)bid * N * chunkSize + chunk * chunkSize;
+    };
+    auto nelemOf = [&](int chunk) -> int {
+      return min(chunkSize, size - offsetOf(chunk));
+    };
+
+    // === Reduce-Scatter: N-1 步 ===
+    // step 0: 只发送
+    int chunk = (ringIx + N - 1) % N;
+    prims.send(offsetOf(chunk), nelemOf(chunk));
+
+    // step 1 ~ N-2: 累加并转发,数据停留在 ringbuf,不写 output
+    for (int j = 2; j < N; ++j) {
+      chunk = (ringIx + N - j) % N;
+      prims.recvReduceSend(offsetOf(chunk), nelemOf(chunk));
+    }
+
+    // === 转折步: Reduce-Scatter 末步 + All-Gather 首步合并 ===
+    // 接收最后一次 reduce → 此 chunk 已是全和 → 写入 output → 同时转发
+    chunk = ringIx;
+    prims.recvReduceCopySend(offsetOf(chunk), nelemOf(chunk));
+
+    // === All-Gather: N-1 步 ===
+    // step N ~ 2N-3: 转发已 reduce 完的 chunk,并写入 output
+    for (int j = 1; j < N - 1; ++j) {
+      chunk = (ringIx + N - j) % N;
+      prims.recvCopySend(offsetOf(chunk), nelemOf(chunk));
+    }
+
+    // step 2N-2: 最后一步只接收+写 output,不再转发
+    chunk = (ringIx + 1) % N;
+    prims.recv(offsetOf(chunk), nelemOf(chunk));
   }
 }
 ```
@@ -291,31 +329,63 @@ __global__ ncclKernel_AllReduce_Ring_Simple_Sum_f32(...) {
   - 写入侧：写 `buffs[step % NCCL_STEPS]` → `__threadfence_system()` → 写 `tail`
   - 读出侧：spin 等 `tail > step`，读 data，写 `head` 推进
   - `NCCL_STEPS = 8` 作为流水深度
+- **简化选择**：本期**只走间接路径**（数据全程通过 ringbuf 中转），不实现 Direct 路径（即不通过 `ptrExchange` 直写 peer output buffer）。Direct 路径可作为后续带宽优化版本的扩展。
 
 #### 6.3.3 transport 模块
 
-- **职责**：装配期建立 peer 间数据通路；热路径上 GPU 内核直接通过 NVLink / IPC 读写远端 ringbuf。
+- **职责**：装配期建立 peer 间数据通路；运行期 GPU 内核直接通过 NVLink / IPC 读写远端 ringbuf。
 - **设计要点**：
   - **后端优先级**：P2P (CUDA IPC + NVLink) 为主路径，SHM 为备用路径。两者都不可用则装配失败。
+  - **后端选择时机**：装配期 `selectTransport` 对**每对 peer 独立决定**——若 `cudaDeviceCanAccessPeer` 返回真则用 P2P，否则降级 SHM。决策结果存在 `comm->channels[i].peers[j].transport` 字段中，运行期不再判断。
   - 后端选择用条件分支表达，两个分支足够直观，无需引入 vtable 多态。
   - 单机内 GPU 端 store / load 即完成数据搬运，host 侧不需要任何辅助线程。
-- **ringbuf 布局**：每对相邻 rank、每方向、每 channel 一份；只服务 Simple 协议，故每个 channel 只需一份 buffer。
+- **ringbuf 布局**：每对相邻 rank、每方向、每 channel 一份；只服务 Simple 协议，故每个 channel 只需一份 buffer。两种后端用统一的 ringbuf ABI 暴露给 device kernel（buffer 指针 + head/tail 计数器地址），布局差异由 transport 层在装配期吸收：
+  - **P2P**：buffer 是远端 GPU 显存，通过 `cudaIpcOpenMemHandle` 映射到本地虚拟地址空间
+  - **SHM**：buffer 是 `/dev/shm` 共享内存，通过 `mmap` 双方共享；head/tail 计数器同样放在 SHM 中
+- **本期不实现 Direct 路径**：不维护 peer output buffer 的指针交换（即 NCCL 的 `ptrExchange` 字段）。All-Gather 阶段也走 ringbuf 中转。该简化牺牲一定带宽（多一次 buffer 拷贝），换得 transport 接口最小化。
 
 #### 6.3.4 enqueue 模块
 
 - **职责**：参数校验 → 选定 chunkSize / nChannels → 写工作描述符 → `cudaLaunchKernel`。
 - **设计要点**：
   - 算法 + 协议固定为 Ring + Simple，无需运行时选择。
-  - chunkSize 与 nChannels 按消息大小档位查一张小表即可，无需复杂代价模型。
   - 单次 AllReduce 走同步路径，本期不支持 Group 聚合（多个原语一次入队）。
+- **chunkSize / nChannels 选择策略**：装配期生成一张以"消息大小"为档位的小表（典型 4~6 档：≤1KB / 1KB~64KB / 64KB~1MB / 1MB~16MB / >16MB），运行期按档位直接查表。表的填充考虑下列因子（均在装配期确定）：
+
+| 因子 | 含义 | 影响 |
+|---|---|---|
+| `buffSize`（Simple 协议 ringbuf 大小）| `commInit` 中按显存预算固定（典型 4MB / channel） | chunkSize 上界 = `buffSize / NCCL_STEPS` |
+| `nthreads` | 每 channel 的 thread 数（典型 256 或 512）| chunkSize 需对齐到 `(nthreads - WARP_SIZE) * sizeof(uint64_t)` |
+| `nChannels` | 本节点 channel 数（典型 = ring 个数，本项目固定一个 ring 配 2~4 channel）| 总数据按 `nChannels × nRanks × chunkSize` 分片 |
+| 消息字节数 `count × sizeof(dtype)` | 用户传入 | 小消息选小 chunk 减少最后一步浪费；大消息选大 chunk 减少 launch 开销 |
 
 #### 6.3.5 bootstrap 模块
 
 - **职责**：进程间 rendezvous，交换 IPC handle 与对齐 rank 序号。
 - **设计要点**：
-  - 单机多进程场景下，用**文件**或 **Unix Domain Socket** 作为 rendezvous 通道。
+  - 单机多进程场景下，用**文件**或 **Unix Domain Socket** 作为 rendezvous 通道（路径由 `ncclCommInit` 的 `rendezvousPath` 参数指定）。
   - 单进程多线程场景：直接共享 host 内存即可，绕过 rendezvous。
-  - 单机内 peerInfo 数据量小（每 rank 几十字节），用线性 N 次 read / write 交换即可，无需构造逻辑 ring 形 AllGather。
+- **同步机制**（UDS 方案，文件方案同理）：
+
+```
+rank 0 (协调者):
+  1. listen(rendezvousPath)                   // 创建监听 socket
+  2. for i in 1..N-1:                         // 接受 N-1 个连接
+       conn[i] = accept()
+  3. for i in 1..N-1: recv peerInfo[i]        // 收齐所有 rank 的 peerInfo
+  4. peerInfo[0] = self                       // 加入自己
+  5. for i in 1..N-1: send peerInfo[*]        // 广播完整的 peerInfo 数组
+
+rank i (i ≥ 1):
+  1. retry connect(rendezvousPath, 超时数秒)   // 等 rank 0 监听就绪
+  2. send peerInfo[i]                         // 上报自己
+  3. recv peerInfo[*]                         // 接收完整数组
+```
+
+- **关键性质**：
+  - 步骤 3 是显式同步点——rank 0 必须收齐 N-1 份才进入广播；其它 rank 在 `recv` 处阻塞，保证看到的是**所有 rank 都已上报后的完整数组**。
+  - 不需要构造逻辑 ring 形 AllGather（上游 bootstrap 的核心机制）：单机内 peerInfo 数据量小（每 rank 几十字节，含 busId + pid + IPC handle），star 拓扑足够。
+  - 超时机制：连接 rank 0 失败时本地重试 + 退避（约 5s），所有 rank 都失败 → 返回 `ncclSystemError`。
 
 #### 6.3.6 init / commLifecycle
 
@@ -366,7 +436,7 @@ sequenceDiagram
   participant Trans as transport
   participant GPU as CUDA driver
 
-  App->>Init: commInit(comm, nranks, rank)
+  App->>Init: commInit(comm, nranks, rank, rendezvousPath)
   Init->>Init: cudaSetDevice 校验 + 分配 comm
   Init->>Boot: rendezvous(文件 / UDS)
   Boot-->>Init: 交换 peerInfo (busId / pid / IPC handle)
@@ -409,7 +479,7 @@ sequenceDiagram
 
 **关键决策**：
 - 入队即返回：`ncclSuccess` 只表示"调度成功"，不代表运算已完成；完成由 CUDA stream 顺序提供。
-- GPU 内核通过 ringbuf 的 head/tail 计数器**自行推进**，调度器投递完后即退出，不参与后续的步骤同步。
+- GPU 内核 launch 后即在 device 上自主运行，依靠 ringbuf 的 head/tail 计数器与 peer 同步；host 端只需 `cudaStreamSynchronize` 等结果。
 
 ### 8.3 流程三：异常退出
 
@@ -440,7 +510,7 @@ sequenceDiagram
 | 维度 | 设计落点 |
 |---|---|
 | **吞吐** | 多 channel 并发；chunkSize 与 NVLink 一次 store 颗粒匹配 |
-| **延迟** | 拓扑 / 建连 / 参数表全部预计算到 init；运行期无任何决策开销；ringbuf head/tail 无锁推进；调度器一次性投递后即退出 |
+| **延迟** | 拓扑 / 建连 / 参数表全部预计算到 init；运行期无任何决策开销；GPU 内核 launch 后通过 ringbuf head/tail 无锁推进 |
 | **可用性** | abortFlag / fatalError 两阶段语义；任一 rank 异常整 comm 失效 |
 | **一致性** | 完成语义由 CUDA stream 提供；不引入额外 Request 模型 |
 | **可观测** | 分级 log（WARN / INFO / TRACE）；NVTX range 包裹 init 与 allReduce |
@@ -458,7 +528,9 @@ sequenceDiagram
 | Simple 协议 8B 小消息延迟显著高于 LL | 小消息场景吞吐受限 | 明确不在本期目标内（G2 = 50 µs 已留余量） |
 | SHM fallback 路径未充分测试 | NVLink 不可用环境装配失败 | 集成测试覆盖 P2P_DISABLE 场景 |
 | 跨进程 IPC handle 交换路径在容器 / cgroup 限制下可能失败 | 部分部署形态不可用 | 文档明确支持范围 |
-| 内存可见性在 ARM / Grace Hopper 上的论证待补 | 边缘平台可能错序 | 本期仅声明支持 x86 + Volta 及以上 NVIDIA GPU |
+| 内存可见性论证完整性 | 全平台可能错序 | 本期仅声明支持 x86 + Volta 及以上 NVIDIA GPU；x86 / Volta+ / Ampere / Hopper / ARM Grace 的 fence 语义与 IPC 跨进程映射可见性论证留待详设阶段补全（应专章覆盖） |
+| 每次 AllReduce 都触发 `cudaLaunchKernel`（与 2.10.3 上游一致），launch overhead 在 µs 级 | 极小消息场景下 launch 开销可能成为延迟主项 | G4 中的"host 端开销 ≤ 5 µs"约束仅指参数校验 + 描述符填写 + 调用 launch API 的 host 侧栈耗时,**不含** driver 进入 GPU 的调度延迟；如后续 G2 进一步压缩,需评估引入持久化内核 + work FIFO（NCCL 2.12+ 方案） |
+| 不实现 Direct 路径（仅走 ringbuf 中转） | All-Gather 阶段带宽较 Direct 路径有一定损失 | 接受；后续优化版本可加 `ptrExchange` 字段引入 Direct 路径 |
 
 ### 10.2 里程碑
 
@@ -478,7 +550,7 @@ sequenceDiagram
 | 上游章节 | 本概设对应 | 差异 |
 |---|---|---|
 | §1.4 集合通信基础 | §1.4 Ring AllReduce 工作原理 | 仅保留 Ring + AllReduce |
-| §3 整体架构 | §5 总体架构 | 5 原则 → 4 原则（去 vtable）；层数从 6 → 6（保持） |
+| §3 整体架构 | §5 总体架构 | 5 原则 → 2 原则（去 vtable / 对称投递 / 三层正交组合）；层数从 7 → 5（合并 graph 与 misc 为装配层、不显式画应用层）|
 | §4.4.1 graph 模块 | §6.3.1 | 简化为朴素 busId 排序 |
 | §4.4.2 device 模块 | §6.3.2 | 模板维度从 5 维 ≈ 2000 个 kernel → 1 个 kernel |
 | §4.4.3 transport 模块 | §6.3.3 | 4 后端 + vtable → 2 后端 + 条件分支 |
@@ -501,7 +573,10 @@ sequenceDiagram
 
 ```c
 // 生命周期 (3)
-ncclResult_t ncclCommInit(ncclComm_t* comm, int nranks, int rank);
+// rendezvousPath: 多进程场景所有 rank 必须传同一路径(文件 / UDS socket 路径,
+//                 用于交换 peerInfo + IPC handle); 单进程多 GPU 场景可传 NULL。
+ncclResult_t ncclCommInit(ncclComm_t* comm, int nranks, int rank,
+                          const char* rendezvousPath);
 ncclResult_t ncclCommDestroy(ncclComm_t comm);
 ncclResult_t ncclCommAbort(ncclComm_t comm);
 
@@ -520,6 +595,8 @@ ncclResult_t ncclGetVersion(int* version);
 ```
 
 合计 9 个符号，满足 G3 ≤ 10 个的约束。
+
+**与上游 NCCL 的 API 差异**：上游用 `ncclGetUniqueId` + `ncclCommInitRank(comm, nranks, ncclUniqueId, rank)` 两个调用，其中 `ncclUniqueId` 是 128 字节的不透明结构（含 TCP 监听地址 + token）。本项目用单个 `const char* rendezvousPath` 字符串替代，要求所有 rank 通过外部协调（MPI、文件系统约定、启动器命令行）拿到同一路径——这与底层用文件 / UDS 做 rendezvous 的实现匹配，避免引入 `ncclUniqueId` 的额外抽象。
 
 ### 12.2 参考资料
 
