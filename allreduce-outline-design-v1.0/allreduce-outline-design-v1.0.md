@@ -1,4 +1,4 @@
-# 《单机多卡 AllReduce 集合通信库》概要设计文档
+# 《zeus-CCL 集合通信库》概要设计文档
 
 ---
 
@@ -142,107 +142,114 @@ flowchart TB
 
 | 模块 | 职责描述 |
 |---|---|
-| **public-api** | 对外暴露 9 个 C ABI 公开符号，承接调用方的所有交互。本模块只做轻量参数合法性检查（指针非空、数值范围、`comm->state` 合法），不做任何语义解析（不展开 dtype/op 的具体含义、不做 GPU 选择、不做内存分配），随后把请求转交内部对应模块（`commInit` → comm；`ncclAllReduce` → enqueue；查询类直接读 comm 字段）。它是稳定 ABI 的物理边界，C++ 内部签名调整不会外溢。 |
-| **bootstrap** | 装配链路的第一站。通过 UDS socket 把所有 N 个 rank 拉到同一会合点，做同步屏障（确保 N 个 rank 都到齐）。完成后所有 rank 都拿到一份完整的 `peerInfo[]`，且 bootstrap 提供的字节包通道可被后续 transport 复用做"二次握手"（交换 IPC handle / SHM 路径）。单进程多线程场景跳过，直接走全局变量。 |
+| **public-api** | 对外暴露 9 个 C ABI 公开符号，承接调用方的所有交互。本模块**只做轻量参数合法性检查**（指针非空、数值范围、`comm->state` 合法），不做任何语义解析（不展开 dtype/op 的具体含义、不做 GPU 选择、不做内存分配），随后把请求转交内部对应模块（`commInit` → comm；`ncclAllReduce` → enqueue；查询类直接读 comm 字段）。它是稳定 ABI 的物理边界，C++ 内部签名调整不会外溢。 |
+| **bootstrap** | 装配链路的第一站。通过 UDS socket 把所有 N 个 rank 拉到同一会合点，做同步屏障（确保 N 个 rank 都到齐）；并让每个 rank 各自起一个常驻的 UDS 监听 socket，把自己的 listen 路径塞进 `peerInfo` 上报。完成后所有 rank 都拿到一份完整的 `peerInfo[]`（含所有 rank 的 `udsListenPath`），transport 后续按此直接 rank i ↔ rank j P2P 交换 IPC handle / SHM 路径，无需经 rank 0 中转。单进程多线程场景跳过，直接走全局变量。 |
 | **comm**（init / commLifecycle）| `commInit / commDestroy / commAbort / commGetAsyncError` 四个 API 的总编排器。对内按顺序调度 bootstrap → graph → transport → devComm 装配，维护 `comm->state` 字段表示当前阶段。本模块本身不做拓扑分析、不做建连、不做 GPU 数据搬运，只负责调度顺序、状态推进、错误传播和异常逃生（`abortFlag` / `fatalError`）。 |
-| **graph** | 装配期完成"获取硬件拓扑 + 构造 Ring 序列"两件事。XML 拓扑文件存在则直接解析，不存在则现场调 NVML / sysfs / `/proc/cpuinfo` 扫描并落盘复用；得到的拓扑树用于填充代价矩阵（PBLink direct / 同 switch / 同 CPU / 跨 NUMA / 不可达），再用 DFS + 剪枝搜出总代价最低的 Hamilton 环，输出 prev/next 两份序列（前向 + 反向，对应 `nChannels = 2`）。结果写入 `comm->channels[*].ring` 后固化，运行期不再活跃。 |
-| **transport** | 装配期建立 peer 间数据通路。具体做法：对每对 peer 调 `cudaDeviceCanAccessPeer` 决定走 P2P (CUDA IPC + PBLink / PCIe) 主路径还是 SHM (`/dev/shm` mmap) 备用路径；分配本端 ringbuf、导出 IPC handle / SHM 路径、经 bootstrap 通道与对端交换、映射对端 buffer 到本端虚拟地址空间。装配完成后，运行期 device kernel 直接通过虚拟地址 `store / load` 远端 ringbuf，transport 层不再参与。 |
+| **graph** | 装配期完成"**获取硬件拓扑 + 构造 Ring 序列**"两件事。XML 拓扑文件存在则直接解析，不存在则现场调 NVML / sysfs / `/proc/cpuinfo` 扫描并落盘复用；得到的拓扑树用于填充代价矩阵（PBLink direct / 同 switch / 同 CPU / 跨 NUMA / 不可达），再用 DFS + 剪枝搜出总代价最低的 Hamilton 环，输出 prev/next 两份序列（前向 + 反向，对应 `nChannels = 2`）。结果写入 `comm->channels[*].ring` 后固化，运行期不再活跃。 |
+| **transport** | 装配期**建立 peer 间数据通路**。具体做法：对每对 peer 调 `cudaDeviceCanAccessPeer` 决定走 P2P (CUDA IPC + PBLink / PCIe) 主路径还是 SHM (`/dev/shm` mmap) 备用路径；分配本端 ringbuf、导出 IPC handle / SHM 路径、按 `peerInfo[peer].udsListenPath` 直连对端做 P2P 二次握手交换 handle、映射对端 buffer 到本端虚拟地址空间。装配完成后，运行期 device kernel 直接通过虚拟地址 `store / load` 远端 ringbuf，transport 层不再参与。 |
 | **enqueue** | 运行期 host 侧的实现入口，是**热路径中唯一的 host 模块**。每次用户调 `ncclAllReduce` 都进入这里，按四步执行：参数校验 → 查档位表得到 `(nChannels, nThreads)` 并按 `buffSize / NCCL_STEPS` 派生 chunkSize → 填 `ncclWorkElem` 工作描述符 → 调 `cudaLaunchKernel` 把 kernel 推到用户传入的 stream 上。约束严格：不做任何运行时决策、不做 host 侧通信、不做内存分配；返回 `ncclSuccess` 仅表示入队成功。 |
 | **device**（GPU 内核）| 整个库**唯一在 GPU 上运行的模块**。模板维度固定为 `<Ring, Simple, Sum, float32>`，只产出一个 kernel 符号 `ncclKernel_AllReduce_Ring_Simple_Sum_f32`。kernel 由 enqueue launch 后从 `ncclDevComm` 读 ring 邻居 / ringbuf 指针 / abortFlag，按 Ring 算法的 `2N-1` 步原语（`send / recvReduceSend / recvReduceCopySend / recvCopySend / recv`）流水推进，自主完成 Reduce-Scatter + All-Gather 两阶段；通过 ringbuf 的 head/tail 与邻居无锁同步，每个 spin 点检查 abortFlag 以支持 hang 逃生。 |
 
 > 备注 : **NVML(NVIDIA Management Library)**是 NVIDIA 提供的 GPU 管理与监控接口库(libnvidia-ml.so),nvidia-smi建立在它之上。它走控制平面旁路,不需要 CUDA Context、不占显存、不影响计算,通过 ioctl 直达内核驱动,即便 CUDA 崩了也能查 GPU 状态。
 
-### 6.2 接口的边界
+### 6.2 各模块实现思路
 
-| 调用方 → 被调方 | 传递数据含义 | 含义 |
-|---|---|---|
-| graph → transport | Ring 序列（每 rank 的 prev/next）| `commInit` 末写入 communicator，运行期不再变动 |
-| init → device | DevComm（含 ring 邻居、ringbuf 指针）| GPU kernel 启动后从 device global 读 |
-| enqueue → device | WorkElem（count / dtype / op / chunkSize）| 单次 AllReduce 的工作描述符 |
-| transport ↔ device | ringbuf buffs + head/tail | 模块间唯一的数据接触面 |
-| bootstrap → transport | IPC handle 字节包 | 按字节包原样传递，传输层不解析其内容 |
+#### 6.2.1 bootstrap 模块
 
-### 6.3 各模块实现思路
-
-#### 6.3.1 bootstrap 模块
-
-**模块定位**：bootstrap 在 `commInit` 阶段执行进程间同步握手。它通过一条预先约定的 UDS socket（从uniqueID解析而来） 让所有 N 个 rank 互相联系上，等所有 rank 都到达后再继续推进，并在此过程中交换每个 rank 的基本信息（`peerInfo`：busId pid等 ）。bootstrap 执行完后，每个 rank 都拿到完整的 `peerInfo[]`，后续 graph 模块据此分析 GPU 拓扑、transport 模块据此交换 IPC handle。
+**模块定位**：bootstrap 在 `commInit` 阶段执行进程间同步握手。它通过一条预先约定的 UDS socket（从uniqueID解析而来）把所有 N 个 rank 拉到同一会合点，等所有 rank 都到达后再继续推进；并在此过程中**让每个 rank 各自起一个自己的 UDS 监听 socket**，把"自己的 listen 路径 + 基本信息"打包进 `peerInfo` 上报。bootstrap 执行完后，每个 rank 都拿到完整的 `peerInfo[]`（含**所有 rank 的 UDS 监听路径**），后续 graph 模块据此分析 GPU 拓扑，transport 模块据此直接 rank i ↔ rank j P2P 交换 IPC handle / SHM 路径，**无需经 rank 0 中转**。
 
 **输入与输出**：
 
 | 项 | 内容 |
 |---|---|
-| 输入 | `nranks`, `rank`, `UDSSocketPath`（UDS socket 路径） |
-| 输出 | `peerInfo[nranks]`（每 rank 几十字节，含 busId、pid等） |
-| 失败模式 | 路径不存在 / 权限不足 / 连接超时 / 各 rank `nranks` 不一致 → 返回 `ncclSystemError`，调用方释放 comm |
+| 输入 | `nranks`, `rank`, `UDSSocketPath`（会合用 UDS 路径——rank 0 在此监听，其它 rank 主动 connect 上报） |
+| 输出 | `peerInfo[nranks]`，每项含 `{ busId, pid, nranks, udsListenPath }`（`udsListenPath` 是该 rank 自己监听的 UDS 路径，供 transport 二次握手时直连） |
+| 副作用 | 本 rank 持有一个长期监听的 UDS socket（绑定在 `udsListenPath`），生命周期与 comm 同步——`commDestroy` 时才 close + unlink |
+| 失败模式 | 路径不存在 / 权限不足 / 连接超时 / 各 rank `nranks` 不一致 / 本 rank `udsListenPath` 创建失败 → 返回 `ncclSystemError`，调用方释放 comm |
 
-**通道选择**：本项目固定使用 **UDS（Unix Domain Socket）方案**——`UDSSocketPath` 是 `AF_UNIX` socket 地址；rank 0 监听、其它 rank 主动 connect。
+**通道与命名约定**：本项目固定使用 **UDS（Unix Domain Socket）方案**——所有 socket 均为 `AF_UNIX` 类型。
+- **会合路径** `UDSSocketPath`：rank 0 在此监听，作为一次性的同步屏障入口；其它 rank 连上、上报完即关闭该连接。
+- **每 rank 自己的监听路径** `udsListenPath`：按约定派生为 `<UDSSocketPath>.<rank>`（例如 `/tmp/nccl-uds-<uniqueId>.3`）。每 rank 在握手前先 bind + listen 自己的路径，再向 rank 0 上报；该 socket 在 bootstrap 后保持监听，供 transport 阶段被其它 rank 直连。rank 0 的 `udsListenPath` 与会合路径 `UDSSocketPath` 重合（即 rank 0 复用同一个监听 socket 处理会合 + 后续二次握手）。
 
 **单进程多线程例外**：`commInit` 检测到所有 rank 在同一进程时跳过同步握手，直接走全局变量共享 `peerInfo`，连 socket 都不创建。
 
 **UDS 方案同步流程**：
 
-> 图 6.3.1-1：UDS 同步握手时序——rank 0 监听 → 各 rank 并发 connect + 上报 → 同步屏障 + 一致性校验 → rank 0 广播完整数组
+> 图 6.2.1-1：UDS 同步握手时序——各 rank 先起自己的监听 → rank 0 在会合路径上等齐 N-1 份上报 → 一致性校验 → rank 0 广播完整 peerInfo[]
 
 ```mermaid
 sequenceDiagram
     autonumber
     participant App0 as 应用<br/>(rank 0)
+    box 集合通信库 (libnccl.so)
     participant R0 as rank 0<br/>(协调者)
     participant Ri as rank i<br/>(i = 1 ~ N-1)
+    end
     participant AppI as 应用<br/>(rank i)
 
     App0->>R0: commInit(nranks, 0, UDSSocketPath)
     AppI->>Ri: commInit(nranks, i, UDSSocketPath)
 
-    Note over R0: listen(UDSSocketPath)<br/>创建监听 socket
+    Note over R0: bind+listen UDSSocketPath<br/>会合监听<br/>同时作为 rank 0 的 udsListenPath
+    Note over Ri: bind+listen UDSSocketPath.i<br/>本 rank 自己的 udsListenPath
 
     rect rgb(255, 247, 230)
-    Note over R0,Ri: 阶段 A · 各 rank 上报 peerInfo
-    loop 每个 i = 1 ~ N-1 (并发执行)
-        Ri->>Ri: retry connect(UDSSocketPath)<br/>退避重试,~5s 超时
-        Ri->>R0: connect 成功 → accept conn[i]
-        Ri->>R0: send peerInfo[i]<br/>(busId + pid + 占位 IPC handle)
+    Note over R0,Ri: 阶段 A · 各 rank 上报 peerInfo 含自己的 udsListenPath
+    loop 每个 i = 1 ~ N-1 并发执行
+        Ri->>Ri: retry connect UDSSocketPath<br/>退避重试 ~5s 超时
+        Ri->>R0: connect 成功 → accept conn i
+        Ri->>R0: send peerInfo i<br/>busId + pid + nranks<br/>udsListenPath = UDSSocketPath.i
     end
     end
 
-    Note over R0: 同步屏障<br/>等齐 N-1 份 peerInfo<br/>peerInfo[0] = self<br/>校验各 rank 宣称的 nranks 一致
+    Note over R0: 同步屏障<br/>等齐 N-1 份 peerInfo<br/>peerInfo 0 = self<br/>udsListenPath = UDSSocketPath<br/>校验各 rank nranks 一致
 
     rect rgb(230, 245, 255)
     Note over R0,Ri: 阶段 B · rank 0 广播完整数组
     loop 每个 i = 1 ~ N-1
-        R0->>Ri: send peerInfo[*]<br/>(完整 peerInfo 数组)
+        R0->>Ri: send peerInfo 数组<br/>含全部 rank 的 udsListenPath
     end
     end
 
-    R0-->>App0: bootstrap 完成,返回 peerInfo[]
-    Ri-->>AppI: bootstrap 完成,返回 peerInfo[]
+    Note over R0,Ri: 会合连接关闭<br/>各 rank 的 udsListenPath<br/>保持监听供 transport 直连
 
-    Note over App0,AppI: graph / transport 据此继续装配
+    R0-->>App0: bootstrap 完成 返回 peerInfo 数组
+    Ri-->>AppI: bootstrap 完成 返回 peerInfo 数组
+
+    Note over App0,AppI: graph / transport 据此继续装配<br/>transport 用 udsListenPath 做 P2P 二次握手
 ```
 
 **伪代码对照**：
 
 ```
 rank 0 (协调者):
-  1. listen(UDSSocketPath)                   // 创建监听 socket
-  2. for i in 1..N-1: conn[i] = accept()      // 接受 N-1 个连接
-  3. for i in 1..N-1: recv peerInfo[i]        // 收齐所有 rank 的 peerInfo
-  4. peerInfo[0] = self                       // 加入自己
-  5. for i in 1..N-1: send peerInfo[*]        // 广播完整的 peerInfo 数组
+  1. bind+listen(UDSSocketPath)               // 会合路径,同时作为自己的 udsListenPath
+  2. for i in 1..N-1: conn[i] = accept()       // 接受 N-1 个会合连接
+  3. for i in 1..N-1: recv peerInfo[i]         // 收齐 (含 udsListenPath = UDSSocketPath.i)
+  4. peerInfo[0] = { self busId/pid/nranks,
+                     udsListenPath = UDSSocketPath }
+  5. 校验 peerInfo[i].nranks 全部一致
+  6. for i in 1..N-1: send peerInfo[*]         // 广播完整数组
+  7. 关闭会合用的 conn[i];保留 UDSSocketPath 上的 listen socket
+     (后续 transport 二次握手时被其它 rank 直连)
 
 rank i (i ≥ 1):
-  1. retry connect(UDSSocketPath, 超时数秒)   // 等 rank 0 监听就绪
-  2. send peerInfo[i]                         // 上报自己
-  3. recv peerInfo[*]                         // 接收完整数组
+  1. bind+listen(UDSSocketPath.i)              // 先把自己的 udsListenPath 建好
+  2. retry connect(UDSSocketPath, 超时数秒)    // 等 rank 0 监听就绪
+  3. send peerInfo[i] = { busId, pid, nranks,
+                          udsListenPath = UDSSocketPath.i }
+  4. recv peerInfo[*]                          // 接收完整数组
+  5. 关闭与 rank 0 的会合连接;保留 UDSSocketPath.i 上的 listen socket
 ```
 
 **实现要点**：
-- 步骤 3 是显式同步点——rank 0 必须收齐 N-1 份才进入广播；其它 rank 阻塞在 `recv` 上，保证看到的是所有 rank 都已上报后的完整数组。
-- 一致性校验：rank 0 收到的 `peerInfo[i].nranks` 必须与自身一致，否则提前失败，避免后续 graph / transport 阶段才暴露不匹配，TODO：后续可在unique中加入其他一致性校验字段。
-- **二次握手**：**transport 层后续会基于同样的字节包通道再交换一次 IPC handle / SHM 路径（此时 `peerInfo` 不再变，只是按 (channel, peer) 二维交换 transport handle）**；这两次握手都走 bootstrap 提供的同一条逻辑信道。
+- 监听先于上报：rank i 必须**先**完成 `bind + listen(udsListenPath)` 再向 rank 0 上报，否则 `peerInfo` 广播后其它 rank 立刻发起 transport 二次握手 connect 时会 ENOENT / ECONNREFUSED。
+- 步骤 3（rank 0 视角）是显式同步点——rank 0 必须收齐 N-1 份才进入广播；其它 rank 阻塞在 `recv` 上，保证看到的是所有 rank 都已上报后的完整数组。
+- 一致性校验：rank 0 收到的 `peerInfo[i].nranks` 必须与自身一致，否则提前失败，避免后续 graph / transport 阶段才暴露不匹配。TODO：后续可在 uniqueId 中加入其他一致性校验字段（版本号、参与者集合摘要等）。
+- **二次握手**：transport 层后续按 (channel, peer) 二维直接交换 IPC handle / SHM 路径——rank i 用 `peerInfo[j].udsListenPath` connect rank j 的常驻监听 socket，**不再走 rank 0 中转**；rank 0 也不再是带宽瓶颈。
+- 监听 socket 生命周期：所有 `udsListenPath` 上的 listen socket 由 bootstrap 创建后**长期保留**，直到 `commDestroy` 才统一 close + `unlink(udsListenPath)`，避免文件系统残留。
 
-#### 6.3.2 comm初始化
+#### 6.2.2 comm初始化
 
 **模块定位**：负责 communicator 的生命周期管理。它对外暴露 `commInit` / `commDestroy` / `commAbort` / `commGetAsyncError` 四个 API，对内按顺序调用 bootstrap、graph、transport 和 devComm 装配，并维护 `comm->state` 字段表示 communicator 当前所处的阶段。其它模块通过读 `comm->state` 判断当前 comm 是否可用。
 
@@ -283,9 +290,9 @@ stateDiagram-v2
 **`ncclCommInit` 实现流程**：
 
 1. **预备**：分配 `comm` 结构，设 `state = Uninit`；`cudaGetDevice` 校验调用线程绑定的 device 与传入参数一致。
-2. **Bootstrapping**：`state = Bootstrapping` → 调 bootstrap 模块（§6.3.1）完成同步握手 → 拿到 `peerInfo[]`。
-3. **Discovering**：`state = Discovering` → 调 graph 模块（§6.3.3）做拓扑发现 + Ring 构造 → 结果写入 `comm->channels[*].ring`。
-4. **Connecting**：`state = Connecting` → 调 transport 模块（§6.3.4）逐 (channel, peer) 建连 → `cudaMalloc` 分配本端 ringbuf → 写入 `comm->channels[*].peers[*]`。
+2. **Bootstrapping**：`state = Bootstrapping` → 调 bootstrap 模块（§6.2.1）完成同步握手 → 拿到 `peerInfo[]`。
+3. **Discovering**：`state = Discovering` → 调 graph 模块（§6.2.3）做拓扑发现 + Ring 构造 → 结果写入 `comm->channels[*].ring`。
+4. **Connecting**：`state = Connecting` → 调 transport 模块（§6.2.4）逐 (channel, peer) 建连 → `cudaMalloc` 分配本端 ringbuf → 写入 `comm->channels[*].peers[*]`。
 5. **DevComm 装配**：把 `comm` 中需要在 GPU 端访问的字段（ring 邻居、ringbuf 指针、abortFlag 指针等）打包到 `ncclDevComm` 结构 → `cudaMemcpyAsync` 拷到 GPU global memory → `comm->devComm` 指向之。
 6. **Active**：`state = Active` → 返回 `ncclSuccess`，从此可接收 `ncclAllReduce` 调用。
 
@@ -306,7 +313,7 @@ stateDiagram-v2
 - 装配期失败 → 当前调用线程同步返回错误码。
 - 运行期 kernel hang / peer 失联 → 由检测者（kernel 内 spin 超时检查 / host 侧轮询 / **主要是RDMA proxy线程，当前版本暂未添加**）写 `comm->fatalError` → 调用方通过 `commGetAsyncError` 看到 → 主动调 `commAbort` 终结整 comm。
 
-#### 6.3.3 graph 模块
+#### 6.2.3 graph 模块
 
 **模块定位**：graph 在装配期完成两件事——**获取全局拓扑描述**（优先读取已有 XML 文件；不存在则现场调 NVML / sysfs 扫描生成并落盘），识别本节点 GPU 间的硬件连接（哪些 GPU 之间能直连、用什么介质、距离几跳）；并在此基础上**构造N条让总通信代价最低的 Ring 序列**（每 rank 在环中的 prev / next）。输入是 bootstrap 提供的 `peerInfo[]`、NVML、sysfs（XML 文件若不存在会被自动生成），输出是 `comm->channels[c].ring`。Ring 序列在 `commInit` 末写入 communicator 后固化，运行期 GPU kernel 直接读取使用，不再做与路由相关的决策。
 
@@ -332,13 +339,13 @@ stateDiagram-v2
 
 **`commInit` 中按以下步骤执行**：
 
-> 图 6.3.3-1：graph 模块关键数据结构——① XML 拓扑文件（输入） ② cost 矩阵（中间产物） ③ ncclRing（输出）
+> 图 6.2.3-1：graph 模块关键数据结构——① XML 拓扑文件（输入） ② cost 矩阵（中间产物） ③ ncclRing（输出）
 >
 > 完整 SVG 见 [`allreduce-graph-datastructures.svg`](allreduce-graph-datastructures.svg)。
 
 ![graph 模块关键数据结构](allreduce-graph-datastructures.svg)
 
-> 图 6.3.3-2：graph 模块在 `commInit` 期间的 7 步装配流程（含失败分支）
+> 图 6.2.3-2：graph 模块在 `commInit` 期间的 7 步装配流程（含失败分支）
 >
 > 完整 SVG 见 [`allreduce-graph-flow.svg`](allreduce-graph-flow.svg)。
 
@@ -380,22 +387,15 @@ stateDiagram-v2
 
 > **代价模型仅在装配期使用，运行期 GPU kernel 看到的就是一份"prev / next 邻居"序列**。
 
-#### 6.3.4 transport 模块
+#### 6.2.4 transport 模块
 
 **模块定位**：transport 在装配期建立 peer 间的数据通路。具体做法是把对端 rank 的 GPU buffer（P2P 路径，通过 CUDA IPC）或 SHM 段（备用路径，通过 `/dev/shm` mmap）映射到本端的虚拟地址空间，使本端 GPU 可以通过普通指针直接 `store / load` 远端 buffer。装配完成后，运行期 device kernel 直接通过这些虚拟地址访问对端 ringbuf，transport 层不再参与。
-
-**要做的工作**：
-- **后端选择**：**判断每个channel每对 peer 决定走 P2P（CUDA IPC + PBLink/PCIe，主路径）还是 SHM（`/dev/shm` mmap，备用路径）**；决策结果写入 `channels[c].peers[p].transport`，运行期不再判断。
-- **导出本端 buffer**：分配 ringbuf 显存（P2P）或 SHM 段（SHM 后端），并导出对应 handle / 路径。
-- **交换 handle**：通过**bootstrap**提供的字节包通道与对端交换 handle / 路径，例如在channel 0上 GPU0 向 GPU1发送数据，GPU1 则将申请ringbuf缓冲区，获取handle通过UDS发送给GPU 0。
-- **映射对端 buffer**：把对端的 handle / 路径变成本端可访问的虚拟地址。
-- **连接落地（两阶段）**：先把"本端 / 对端 buffer 指针 + head/tail 计数器地址"写入 host 端 `channels[c].peers[p].{connSend, connRecv}`；再由 init / commLifecycle 模块（§6.3.2 Step 5）把这些指针打包进 `ncclDevComm` 结构、`cudaMemcpyAsync` 拷到 GPU HBM。运行期 kernel 通过 `ncclShmem.comm` 读到这些指针后才能 dereference 访问真正的 ringbuf 与计数器——**指针必须先在 HBM 上，kernel 才看得到**。
 
 **输入与输出**：
 
 | 项 | 内容 |
 |---|---|
-| 输入 | `comm->channels[c].ring`（决定要连哪些 peer）+ bootstrap 提供的字节包通道 |
+| 输入 | `comm->channels[c].ring`（决定要连哪些 peer）+ `peerInfo[*].udsListenPath`（用于直连对端做二次握手） |
 | 输出 | `comm->channels[c].peers[p].{connSend, connRecv}`：buffer 指针 + head/tail 计数器地址 |
 | 失败模式 | P2P 不通且 SHM 也创建失败、IPC handle 交换超时 → 返回 `ncclSystemError` |
 
@@ -408,7 +408,7 @@ stateDiagram-v2
 2. **导出本端 buffer**：
    - **P2P 分支**：`cudaMalloc` 分配 `buffSize` 显存 → `cudaIpcGetMemHandle` 导出为 64 字节不透明 handle。
    - **SHM 分支**：在 `/dev/shm` 创建文件 → `ftruncate(buffSize)` → `mmap` 拿到 host VA；head/tail 计数器与 buffer 同段放置。
-3. **handle 交换**：通过 bootstrap 提供的字节包通道把 IPC handle / SHM 路径发给对端，并收到对端的对应物。transport 层不解析包内容，仅按字节包传递。
+3. **handle 交换**：`connect(peerInfo[peer].udsListenPath)` 直连对端常驻 UDS 监听 socket，把 IPC handle / SHM 路径发过去，并收到对端的对应物。每对 (channel, peer) 一次往返；transport 层不解析包内容，仅按字节包传递。
 4. **映射对端 buffer**：
    - **P2P 分支**：`cudaIpcOpenMemHandle(对端 handle)` → 得到本地虚拟地址。
    - **SHM 分支**：`open(对端发来的路径)` → `mmap` → 本地虚拟地址。
@@ -419,7 +419,7 @@ stateDiagram-v2
    - `connRecv.head`：Simple 协议中"读者推进、写者 spin"的 head 计数器虚拟地址（位于 writer HBM）。
    - **本步只写 host 内存，GPU kernel 此时还看不到这些指针**。
 
-6. **指针下发到 HBM（与 §6.3.2 Step 5 协同）**：transport 完成 host 端写入后，init / commLifecycle 接管：
+6. **指针下发到 HBM（与 §6.2.2 Step 5 协同）**：transport 完成 host 端写入后，init / commLifecycle 接管：
    - 把 `channels[*].peers[*]` 中 kernel 运行期会用到的字段（ringbuf 指针、tail / head 地址、ring 邻居 prev/next、abortFlag 指针）打包到 `ncclDevComm` 结构。
    - `cudaMalloc` 在 GPU HBM 分配 `ncclDevComm` 空间 → `cudaMemcpyAsync` 把 host 打包好的结构拷到 GPU 端 → `comm->devComm` 记下 GPU 端地址。
    - enqueue 在 launch kernel 时把 `comm->devComm` 作为 kernel 参数传入；kernel 启动后通过 `ncclShmem.comm` 引用 `ncclDevComm`，从 HBM 读出这些指针，再 dereference 访问真正的 ringbuf / 计数器。
@@ -427,7 +427,7 @@ stateDiagram-v2
 
 **ringbuf 布局**（每对相邻 rank、每方向、每 channel 一份）：
 
-> 图 6.3.4-1：ringbuf 内部结构（slot 数 / head/tail 指针）、一对相邻 rank 的 4 份 ringbuf 配对、全节点 4N 总量、P2P 与 SHM 后端对比。
+> 图 6.2.4-1：ringbuf 内部结构（slot 数 / head/tail 指针）、一对相邻 rank 的 4 份 ringbuf 配对、全节点 4N 总量、P2P 与 SHM 后端对比。
 >
 > 完整 SVG 见 [`allreduce-transport-ringbuf.svg`](allreduce-transport-ringbuf.svg)。
 
@@ -439,7 +439,7 @@ stateDiagram-v2
 
 只服务 Simple 协议，每 channel 一份 buffer 足够（LL/LL128 才需额外的 flag buffer）。两种后端通过同一 ABI（`buffs + head/tail` 指针对）暴露给 kernel，布局差异在装配期吸收；运行期 kernel 拿到的就是普通虚拟地址指针，store/load 直接走硬件路径，host 侧不需要任何辅助线程。
 
-#### 6.3.5 enqueue 模块
+#### 6.2.5 enqueue 模块
 
 **模块定位**：enqueue 是运行期 host 侧的实现入口。每次用户调 `ncclAllReduce`，都进入这个模块，按固定四步执行：参数校验 → 查档位表得到 `(nChannels, nThreads)` 并派生 chunkSize → 填工作描述符 → 调 `cudaLaunchKernel`。本模块不做任何运行时决策、不做 host 侧通信、不做内存分配——这些工作都已在装配期完成。
 
@@ -484,7 +484,7 @@ stateDiagram-v2
 
 **异步性边界**：API 返回 ≠ 操作完成；完成可见性需要用户通过 stream 同步获得，与 CUDA stream 的标准语义对齐。
 
-#### 6.3.6 device 模块
+#### 6.2.6 device 模块
 
 **模块定位**：device 是整个库唯一在 GPU 上运行的模块，其它模块都是 host C++ 代码。它实现 Ring AllReduce 的 GPU kernel，模板维度固定为 `<Ring, Simple, Sum, float32>`，整个模块只产出一个 kernel 符号 `ncclKernel_AllReduce_Ring_Simple_Sum_f32`。kernel 由 enqueue 模块 launch 之后，从 `ncclDevComm` 读取本 rank 的 ring 邻居、ringbuf 指针、`abortFlag` 指针，按 Ring 算法的 `2N-1` 步原语调用顺序推进，不需要 host 介入，直到处理完用户传入的整个张量。
 
@@ -582,9 +582,8 @@ __global__ void ncclKernel_AllReduce_Ring_Simple_Sum_f32(ncclWorkElem* args) {
 - 写入侧：写数据到 `buffs[step % NCCL_STEPS]` → `__threadfence_system()` 保序 → 写 `tail` 计数器通知对端。
 - 读出侧：在 `tail > step` 上 spin → 读 data → 写 `head` 计数器释放 slot。
 - **abortFlag 检查点**：每次 spin 迭代检查 `*abortFlag`，置位则立即 return，跳过剩余 chunk / 剩余 step——这是 hang 逃生的关键挂钩点（参见 §7.3）。
-- 流水深度固定 `NCCL_STEPS = 8`，装配期按此分配 `buffSize = NCCL_STEPS × chunkSize`。
 
-**实现简化**：本期只走"间接路径"——数据始终经本端 ringbuf 中转。不实现 Direct 路径（不通过 `ptrExchange` 拿到 peer output buffer 指针后直写），换得 transport 接口最小化。
+> 备注：本期只走"间接路径"——数据始终经本端 ringbuf 中转。不实现 Direct 路径（不通过 `ptrExchange` 拿到 peer output buffer 指针后直写），换得 transport 接口最小化。
 
 ---
 
