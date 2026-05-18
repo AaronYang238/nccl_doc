@@ -502,6 +502,10 @@ stateDiagram-v2
 
 **单 channel 内执行流程**（对 `count` 元素的张量）：
 
+> 图 6.2.6-1：Ring AllReduce 单 channel 内 `2N-1` 步原语流水示意——Reduce-Scatter（N-1 步）→ 转折步（写 output + 转发）→ All-Gather（N-1 步）
+
+![Ring AllReduce 单 channel 执行示意](all_reduce_demo.jpg)
+
 1. 取本 channel 的数据起点 `gridOffset = 0`，每轮处理 `loopSize = nChannels × nRanks × chunkSize` 元素。
 2. 在每轮内，按 Ring 切成 `nRanks` 个 chunk，依次发起 `2N-1` 次原语调用，对应五种步骤类型——
 
