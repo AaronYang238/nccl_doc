@@ -8,7 +8,7 @@
 
 深度学习训练中，DDP 梯度同步是 GPU 间通信的最大消耗，而 AllReduce 是其核心原语：所有 rank 输入相同形状的张量，输出是各 rank 对应位置求和（或其它归约）的结果。
 
-当前目标是给出一个**最小可用、行为完备**的 AllReduce 实现：聚焦单机多卡、采用 Ring 算法 + Simple 协议这一组成熟搭配，覆盖从 API 入口到 GPU 内核的完整链路。
+当前目标是给出一个最小可用、行为完备的 AllReduce 实现：聚焦**单机多卡、采用 Ring 算法 + Simple 协议**这一组成熟搭配，覆盖从 API 入口到 GPU 内核的完整链路。
 
 ### 1.2 Ring AllReduce 工作原理（概念）
 
@@ -455,16 +455,6 @@ stateDiagram-v2
 6. **立即返回 `ncclSuccess`**：仅表示"入队成功"；完成语义由 stream 提供（`cudaStreamSynchronize` 后 `recvbuff` 可读）。
 
 算法 + 协议固定为 Ring + Simple，无运行时选择；本期不支持 Group 聚合（多原语一次入队）、不支持 CUDA Graph capture。
-
-**档位表与派生公式的相关参数**（均在装配期确定）：
-
-| 相关参数 | 含义 | 影响 |
-|---|---|---|
-| `maxThreads[algo][proto]` | 装配期填好的"线程数上限"二维表 | 查表直接得 `nThreads`（本期 `[Ring][Simple]` 一项即可，典型 256 或 512）|
-| `buffSize`（Simple 协议 ringbuf 大小）| `commInit` 中按显存预算固定（典型 4MB / channel） | chunkSize 派生上界 = `buffSize / NCCL_STEPS` |
-| `chunkSteps` | 协议常量（Simple AllReduce 通常 = 2）| 与 `buffSize / NCCL_STEPS` 相乘得 chunkSize 初值 |
-| `nChannels` | 本节点 channel 数（本期固定 2）| 总数据按 `nChannels × nRanks × chunkSize` 分片 |
-| 消息字节数 `count × sizeof(dtype)` | 用户传入 | 决定落在哪一档；同时驱动 chunkSize 的 halve 微调 |
 
 **档位表形态示例**（仅说明结构，具体数值由详设阶段实测确定）：
 
