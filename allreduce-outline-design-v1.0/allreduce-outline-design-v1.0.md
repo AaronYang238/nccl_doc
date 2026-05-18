@@ -345,12 +345,6 @@ stateDiagram-v2
 
 ![graph 模块关键数据结构](allreduce-graph-datastructures.svg)
 
-> 图 6.2.3-2：graph 模块在 `commInit` 期间的 7 步装配流程（含失败分支）
->
-> 完整 SVG 见 [`allreduce-graph-flow.svg`](allreduce-graph-flow.svg)。
-
-![graph 模块 commInit 执行流程](allreduce-graph-flow.svg)
-
 1. **获取 XML 拓扑文件**：先尝试从约定路径（或 `NCCL_TOPO_FILE` 环境变量指定路径）读取已有 XML 文件：
    - **文件存在**：按 `<cpu>` → `<pci>` → `<gpu>` 层级解析为内存中的拓扑树（快路径，无需调用 NVML / sysfs）。
    - **文件不存在**：现场调用 NVML / sysfs / `/proc/cpuinfo` 等接口扫描节点拓扑，构建拓扑树，并把结果序列化写到同一路径下保存——下次 `commInit` 启动时即走"文件存在"的快路径。这是一次性的兜底，保证首次部署或机器换硬件后仍能自举。
@@ -371,7 +365,7 @@ stateDiagram-v2
    - **简化兜底（贪心 + 2-opt）**：DFS 超时退回贪心——从 rank 0 出发每步选剩余 GPU 中当前 `cost` 最小的邻居，同样按比例消耗带宽；环形闭合后做一次 2-opt：对每两条非相邻边 `(a-b, c-d)` 尝试换成 `(a-c, b-d)`，若总代价下降则接受（交换时需恢复换出边的带宽、消耗换入边的带宽），迭代直到无改进。
    - **退化情况**：所有可达分支累积消耗后剩余带宽不足以闭合环（cost 全部到 ∞）→ 回溯耗尽 → 装配失败。
 
-    > **备注：1. 当前nchannel手动配置。NCCL采用其他算法确定最合适的channel数； 2. 未考虑复杂PCIe switch场景：两个GPU之间占用多条物理链路。**
+    > **备注：1. 当前nchannel手动配置。NCCL采用其他算法确定最合适的channel数； 2. 未考虑复杂PCIe switch场景：例如GPU 0与GPU 1、GPU 0与GPU 2占用了相同的某段PCIe链路**
 
 5. **环合法性校验**：扫描搜出的环上 N 条边——
    - `cost = 1 / 5 / 10 / 50`：边可用，运行期由 transport 走 P2P（前两类通常落到 NVLink / PBLink，后两类落到 PCIe Peer）。
