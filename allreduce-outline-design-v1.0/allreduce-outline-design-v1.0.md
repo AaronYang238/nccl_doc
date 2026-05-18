@@ -8,7 +8,7 @@
 
 深度学习训练中，DDP 梯度同步是 GPU 间通信的最大消耗，而 AllReduce 是其核心原语：所有 rank 输入相同形状的张量，输出是各 rank 对应位置求和（或其它归约）的结果。
 
-本项目目标是给出一个**最小可用、行为完备**的 AllReduce 实现：聚焦单机多卡、采用 Ring 算法 + Simple 协议这一组成熟搭配，覆盖从 API 入口到 GPU 内核的完整链路。
+当前目标是给出一个**最小可用、行为完备**的 AllReduce 实现：聚焦单机多卡、采用 Ring 算法 + Simple 协议这一组成熟搭配，覆盖从 API 入口到 GPU 内核的完整链路。
 
 ### 1.2 Ring AllReduce 工作原理（概念）
 
@@ -132,7 +132,7 @@ flowchart TB
 
 把所有"需要决策、需要 syscall、需要进程间交互"的工作集中到 `commInit` 一次性完成——包括：枚举 GPU、可达性探测、Ring 序列构造、后端选择（P2P / SHM）、IPC handle 交换、ringbuf 分配、`devComm` 结构装配并拷到 GPU。这些结果在 init 末统一写入 `comm` 结构，运行期不再变动。
 
-每次 `ncclAllReduce` 调用的热路径只剩固定的几步：参数校验 → 按消息大小查 chunkSize / nChannels 档位表 → 填工作描述符 → `cudaLaunchKernel`，没有任何运行时决策、没有任何 host 侧通信。GPU kernel 启动后自主在 device 上推进，host 与其它 rank 之间只通过 ringbuf 的 head/tail 计数器同步。
+每次 `ncclAllReduce` 调用的热路径只剩固定的几步：参数校验 → 按消息大小查档位表得到 `(nChannels, nThreads)` 并派生 chunkSize → 填工作描述符 → `cudaLaunchKernel`，没有任何运行时决策、没有任何 host 侧通信。GPU kernel 启动后自主在 device 上推进，host 与其它 rank 之间只通过 ringbuf 的 head/tail 计数器同步。
 
 ---
 
@@ -140,15 +140,17 @@ flowchart TB
 
 ### 6.1 模块清单
 
-| 层 | 模块 | 一句话职责 |
-|---|---|---|
-| L1 | **public-api** | C ABI 入口 + 轻量参数校验（仅做基本合法性检查，不做语义解析）|
-| L2 | **enqueue** | 单次 AllReduce 的统一调度入口（写工作描述符、launch kernel）|
-| L3 | **device**（GPU 内核）| Ring AllReduce GPU kernel（含 Simple 协议搬运、Sum reduce）|
-| L4 | **transport** | P2P (CUDA IPC + PBLink) 建连与 ringbuf 管理；SHM 作为不可达时的备用路径 |
-| L5 | **graph** | 装配期拓扑发现 + Ring 构造（**仅 init 活跃**）|
-| L5 | **bootstrap** | 进程间同步握手（交换 IPC handle、对齐参数）|
-| L5 | **comm** | 装配编排 + 生命周期状态机 |
+| 模块 | 职责描述 |
+|---|---|
+| **public-api** | 对外暴露 9 个 C ABI 公开符号，承接调用方的所有交互。本模块只做轻量参数合法性检查（指针非空、数值范围、`comm->state` 合法），不做任何语义解析（不展开 dtype/op 的具体含义、不做 GPU 选择、不做内存分配），随后把请求转交内部对应模块（`commInit` → comm；`ncclAllReduce` → enqueue；查询类直接读 comm 字段）。它是稳定 ABI 的物理边界，C++ 内部签名调整不会外溢。 |
+| **bootstrap** | 装配链路的第一站。通过 UDS socket 把所有 N 个 rank 拉到同一会合点，做同步屏障（确保 N 个 rank 都到齐）。完成后所有 rank 都拿到一份完整的 `peerInfo[]`，且 bootstrap 提供的字节包通道可被后续 transport 复用做"二次握手"（交换 IPC handle / SHM 路径）。单进程多线程场景跳过，直接走全局变量。 |
+| **comm**（init / commLifecycle）| `commInit / commDestroy / commAbort / commGetAsyncError` 四个 API 的总编排器。对内按顺序调度 bootstrap → graph → transport → devComm 装配，维护 `comm->state` 字段表示当前阶段。本模块本身不做拓扑分析、不做建连、不做 GPU 数据搬运，只负责调度顺序、状态推进、错误传播和异常逃生（`abortFlag` / `fatalError`）。 |
+| **graph** | 装配期完成"获取硬件拓扑 + 构造 Ring 序列"两件事。XML 拓扑文件存在则直接解析，不存在则现场调 NVML / sysfs / `/proc/cpuinfo` 扫描并落盘复用；得到的拓扑树用于填充代价矩阵（PBLink direct / 同 switch / 同 CPU / 跨 NUMA / 不可达），再用 DFS + 剪枝搜出总代价最低的 Hamilton 环，输出 prev/next 两份序列（前向 + 反向，对应 `nChannels = 2`）。结果写入 `comm->channels[*].ring` 后固化，运行期不再活跃。 |
+| **transport** | 装配期建立 peer 间数据通路。具体做法：对每对 peer 调 `cudaDeviceCanAccessPeer` 决定走 P2P (CUDA IPC + PBLink / PCIe) 主路径还是 SHM (`/dev/shm` mmap) 备用路径；分配本端 ringbuf、导出 IPC handle / SHM 路径、经 bootstrap 通道与对端交换、映射对端 buffer 到本端虚拟地址空间。装配完成后，运行期 device kernel 直接通过虚拟地址 `store / load` 远端 ringbuf，transport 层不再参与。 |
+| **enqueue** | 运行期 host 侧的实现入口，是**热路径中唯一的 host 模块**。每次用户调 `ncclAllReduce` 都进入这里，按四步执行：参数校验 → 查档位表得到 `(nChannels, nThreads)` 并按 `buffSize / NCCL_STEPS` 派生 chunkSize → 填 `ncclWorkElem` 工作描述符 → 调 `cudaLaunchKernel` 把 kernel 推到用户传入的 stream 上。约束严格：不做任何运行时决策、不做 host 侧通信、不做内存分配；返回 `ncclSuccess` 仅表示入队成功。 |
+| **device**（GPU 内核）| 整个库**唯一在 GPU 上运行的模块**。模板维度固定为 `<Ring, Simple, Sum, float32>`，只产出一个 kernel 符号 `ncclKernel_AllReduce_Ring_Simple_Sum_f32`。kernel 由 enqueue launch 后从 `ncclDevComm` 读 ring 邻居 / ringbuf 指针 / abortFlag，按 Ring 算法的 `2N-1` 步原语（`send / recvReduceSend / recvReduceCopySend / recvCopySend / recv`）流水推进，自主完成 Reduce-Scatter + All-Gather 两阶段；通过 ringbuf 的 head/tail 与邻居无锁同步，每个 spin 点检查 abortFlag 以支持 hang 逃生。 |
+
+> 备注 : **NVML(NVIDIA Management Library)**是 NVIDIA 提供的 GPU 管理与监控接口库(libnvidia-ml.so),nvidia-smi建立在它之上。它走控制平面旁路,不需要 CUDA Context、不占显存、不影响计算,通过 ioctl 直达内核驱动,即便 CUDA 崩了也能查 GPU 状态。
 
 ### 6.2 接口的边界
 
@@ -166,18 +168,12 @@ flowchart TB
 
 **模块定位**：bootstrap 在 `commInit` 阶段执行进程间同步握手。它通过一条预先约定的 UDS socket（从uniqueID解析而来） 让所有 N 个 rank 互相联系上，等所有 rank 都到达后再继续推进，并在此过程中交换每个 rank 的基本信息（`peerInfo`：busId pid等 ）。bootstrap 执行完后，每个 rank 都拿到完整的 `peerInfo[]`，后续 graph 模块据此分析 GPU 拓扑、transport 模块据此交换 IPC handle。
 
-**要做的工作**：
-- **建立 UDS socket 通路**：rank 0 监听、其它 rank 主动 connect，形成星形拓扑的字节包信道。
-- **同步屏障 + 信息交换**：rank 0 收齐 N-1 份 `peerInfo` 后广播给所有 rank，效果等价于一次 N→1→N 的 AllGather。
-- **一致性校验**：各 rank 宣称的 `nranks` 必须一致，否则提前失败。
-- **为后续装配铺路**：graph 模块靠 `peerInfo[i].busId` 做拓扑分析；transport 模块在装配后期会再用一次同一信道做"二次握手"交换 IPC handle / SHM 路径。
-
 **输入与输出**：
 
 | 项 | 内容 |
 |---|---|
 | 输入 | `nranks`, `rank`, `UDSSocketPath`（UDS socket 路径） |
-| 输出 | `peerInfo[nranks]`（每 rank 几十字节，含 busId + pid + 占位 IPC handle 槽） |
+| 输出 | `peerInfo[nranks]`（每 rank 几十字节，含 busId、pid等） |
 | 失败模式 | 路径不存在 / 权限不足 / 连接超时 / 各 rank `nranks` 不一致 → 返回 `ncclSystemError`，调用方释放 comm |
 
 **通道选择**：本项目固定使用 **UDS（Unix Domain Socket）方案**——`UDSSocketPath` 是 `AF_UNIX` socket 地址；rank 0 监听、其它 rank 主动 connect。
@@ -185,6 +181,47 @@ flowchart TB
 **单进程多线程例外**：`commInit` 检测到所有 rank 在同一进程时跳过同步握手，直接走全局变量共享 `peerInfo`，连 socket 都不创建。
 
 **UDS 方案同步流程**：
+
+> 图 6.3.1-1：UDS 同步握手时序——rank 0 监听 → 各 rank 并发 connect + 上报 → 同步屏障 + 一致性校验 → rank 0 广播完整数组
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant App0 as 应用<br/>(rank 0)
+    participant R0 as rank 0<br/>(协调者)
+    participant Ri as rank i<br/>(i = 1 ~ N-1)
+    participant AppI as 应用<br/>(rank i)
+
+    App0->>R0: commInit(nranks, 0, UDSSocketPath)
+    AppI->>Ri: commInit(nranks, i, UDSSocketPath)
+
+    Note over R0: listen(UDSSocketPath)<br/>创建监听 socket
+
+    rect rgb(255, 247, 230)
+    Note over R0,Ri: 阶段 A · 各 rank 上报 peerInfo
+    loop 每个 i = 1 ~ N-1 (并发执行)
+        Ri->>Ri: retry connect(UDSSocketPath)<br/>退避重试,~5s 超时
+        Ri->>R0: connect 成功 → accept conn[i]
+        Ri->>R0: send peerInfo[i]<br/>(busId + pid + 占位 IPC handle)
+    end
+    end
+
+    Note over R0: 同步屏障<br/>等齐 N-1 份 peerInfo<br/>peerInfo[0] = self<br/>校验各 rank 宣称的 nranks 一致
+
+    rect rgb(230, 245, 255)
+    Note over R0,Ri: 阶段 B · rank 0 广播完整数组
+    loop 每个 i = 1 ~ N-1
+        R0->>Ri: send peerInfo[*]<br/>(完整 peerInfo 数组)
+    end
+    end
+
+    R0-->>App0: bootstrap 完成,返回 peerInfo[]
+    Ri-->>AppI: bootstrap 完成,返回 peerInfo[]
+
+    Note over App0,AppI: graph / transport 据此继续装配
+```
+
+**伪代码对照**：
 
 ```
 rank 0 (协调者):
@@ -203,7 +240,7 @@ rank i (i ≥ 1):
 **实现要点**：
 - 步骤 3 是显式同步点——rank 0 必须收齐 N-1 份才进入广播；其它 rank 阻塞在 `recv` 上，保证看到的是所有 rank 都已上报后的完整数组。
 - 一致性校验：rank 0 收到的 `peerInfo[i].nranks` 必须与自身一致，否则提前失败，避免后续 graph / transport 阶段才暴露不匹配，TODO：后续可在unique中加入其他一致性校验字段。
-- **二次握手**：transport 层后续会基于同样的字节包通道再交换一次 IPC handle / SHM 路径（此时 `peerInfo` 不再变，只是按 (channel, peer) 二维交换 transport handle）；这两次握手都走 bootstrap 提供的同一条逻辑信道。
+- **二次握手**：**transport 层后续会基于同样的字节包通道再交换一次 IPC handle / SHM 路径（此时 `peerInfo` 不再变，只是按 (channel, peer) 二维交换 transport handle）**；这两次握手都走 bootstrap 提供的同一条逻辑信道。
 
 #### 6.3.2 comm初始化
 
@@ -255,25 +292,23 @@ stateDiagram-v2
 任一步骤失败 → `state = Failed` → 走清理路径（与 Destroy 共享），返回错误码。
 
 **`ncclCommDestroy` 实现**：
-1. `state = Destroying`，拒绝新的 AllReduce 入队。
-2. 等当前 in-flight kernel 完成（`cudaStreamSynchronize` 或显式 event 等待）。
-3. 反向释放：`cudaIpcCloseMemHandle` / SHM `munmap` → `cudaFree` ringbuf → 释放 `peerInfo[]` → 释放 `comm` 结构。
+1. `state = Destroying`，拒绝新的 AllReduce 入队。等当前执行kernel完成（`cudaStreamSynchronize` 或显式 event 等待）。
+2. `cudaIpcCloseMemHandle` / SHM `munmap` → `cudaFree` ringbuf → 释放 `peerInfo[]` → 释放 `comm` 结构。
 
 **`ncclCommAbort` 实现**（异常逃生路径，与 Destroy 共享清理代码）：
-1. `state = Aborting`，拒绝新的入队。
-2. 置 `*abortFlag = 1`（host 写，GPU 在 spin 中可见——依赖 kernel 侧的 `__threadfence_system` 形成可见性边界）。
-3. 等 kernel 看到 flag 后 `return`。
-4. 进入与 Destroy 相同的资源释放路径。
+1. `state = Aborting`，拒绝新的入队。置 `*abortFlag = 1`（host写，GPU 读）。
+2. 等 kernel 看到 flag 后 `return`。
+3. 进入与 Destroy 相同的资源释放路径。
 
-**`ncclCommGetAsyncError` 实现**：原子读 `comm->fatalError` 返回。这是少数允许从非驱动线程调用的查询接口，便于训练框架在另一个线程做健康检查；检测到错误后调用方应主动调 `commAbort` 完成清理。
+**`ncclCommGetAsyncError` 实现**：原子读 `comm->fatalError` 返回。这是少数允许上层应用查询接口，便于训练框架在另一个线程做健康检查；检测到错误后调用方应主动调 `commAbort` 完成清理。
 
 **错误传播路径**：
 - 装配期失败 → 当前调用线程同步返回错误码。
-- 运行期 kernel hang / peer 失联 → 由检测者（kernel 内 spin 超时检查 / host 侧轮询）写 `comm->fatalError` → 调用方通过 `commGetAsyncError` 看到 → 主动调 `commAbort` 终结整 comm。
+- 运行期 kernel hang / peer 失联 → 由检测者（kernel 内 spin 超时检查 / host 侧轮询 / **主要是RDMA proxy线程，当前版本暂未添加**）写 `comm->fatalError` → 调用方通过 `commGetAsyncError` 看到 → 主动调 `commAbort` 终结整 comm。
 
 #### 6.3.3 graph 模块
 
-**模块定位**：graph 在装配期完成两件事——获取全局拓扑描述（优先读取已有 XML 文件；不存在则现场调 NVML / sysfs 扫描生成并落盘），识别本节点 GPU 间的硬件连接（哪些 GPU 之间能直连、用什么介质、距离几跳）；并在此基础上构造一条让总通信代价最低的 Ring 序列（每 rank 在环中的 prev / next）。输入是 bootstrap 提供的 `peerInfo[]`（XML 文件若不存在会被自动生成），输出是 `comm->channels[c].ring`。Ring 序列在 `commInit` 末写入 communicator 后固化，运行期 GPU kernel 直接读取使用，不再做与路由相关的决策。
+**模块定位**：graph 在装配期完成两件事——**获取全局拓扑描述**（优先读取已有 XML 文件；不存在则现场调 NVML / sysfs 扫描生成并落盘），识别本节点 GPU 间的硬件连接（哪些 GPU 之间能直连、用什么介质、距离几跳）；并在此基础上**构造N条让总通信代价最低的 Ring 序列**（每 rank 在环中的 prev / next）。输入是 bootstrap 提供的 `peerInfo[]`、NVML、sysfs（XML 文件若不存在会被自动生成），输出是 `comm->channels[c].ring`。Ring 序列在 `commInit` 末写入 communicator 后固化，运行期 GPU kernel 直接读取使用，不再做与路由相关的决策。
 
 **输入与输出**：
 
@@ -285,19 +320,25 @@ stateDiagram-v2
 
 **链路分类与代价模型**：
 
-| 类别 | 检测方式 | 代价 |
+| 类别 | 检测方式 | 链路代价 |
 |---|---|---|
 | PBLink direct | XML 中存在 GPU-GPU 直连 PBLink 边 + `cudaDeviceGetP2PAttribute(_PerformanceRank, _AccessSupported)` 校验 | 1 |
 | PCIe Peer，同 PCIe switch | XML 中两 GPU 挂在同一 PCIe switch 下 | 5 |
 | PCIe Peer，同 CPU root complex | XML 中两 GPU 同 host bridge 但跨 PCIe switch | 10 |
 | PCIe Peer，跨 CPU NUMA | XML 中两 GPU 跨 CPU socket | 50 |
-| 不可达 | XML 中无连接边 或 `cudaDeviceCanAccessPeer == false` | ∞（交给 transport 走 SHM 降级） |
+| 不可达 | XML 中无连接边 或 `cudaDeviceCanAccessPeer == false` | ∞ / INIT_MAX（交给 transport 走 SHM 降级） |
 
-代价数值仅是相对量级，用于在多条候选环中做比较；不直接对应任何时延 / 带宽指标。
+> **代价数值仅是相对量级，用于在多条候选环中做比较；不直接对应任何时延 / 带宽指标。**
 
 **`commInit` 中按以下步骤执行**：
 
-> 图 6.3.3-1：graph 模块在 `commInit` 期间的 7 步装配流程（含失败分支）
+> 图 6.3.3-1：graph 模块关键数据结构——① XML 拓扑文件（输入） ② cost 矩阵（中间产物） ③ ncclRing（输出）
+>
+> 完整 SVG 见 [`allreduce-graph-datastructures.svg`](allreduce-graph-datastructures.svg)。
+
+![graph 模块关键数据结构](allreduce-graph-datastructures.svg)
+
+> 图 6.3.3-2：graph 模块在 `commInit` 期间的 7 步装配流程（含失败分支）
 >
 > 完整 SVG 见 [`allreduce-graph-flow.svg`](allreduce-graph-flow.svg)。
 
@@ -316,10 +357,14 @@ stateDiagram-v2
    - 按上表"链路分类与代价模型"填入对应代价；XML 中没有任何连接、或 `cudaDeviceCanAccessPeer(i, j) == false` → `cost[i][j] = ∞`。
    - 对角线 `cost[i][i] = 0`（自连接不参与搜索）。
 
-4. **Ring 搜索**：在代价矩阵上找一条总代价最小的 Hamilton 环——
-   - **首发实现（DFS + 剪枝）**：N ≤ 16，从 rank 0 出发递归选下一个未访问节点；维护当前路径累计代价 `acc`，若 `acc + 剩余下界估计 ≥ 已知最优解` 则回溯。剩余下界用"剩余未访问节点各自最小出边和"估算。固定起点 rank 0 打破环的 N 重旋转对称；只搜环的一个方向打破镜像对称。
-   - **简化兜底（贪心 + 2-opt）**：DFS 超时（极端拓扑）退回贪心——从 rank 0 出发每步选剩余 GPU 中 `cost` 最小的邻居；环形闭合后做一次 2-opt：对每两条非相邻边 (a-b, c-d) 尝试换成 (a-c, b-d)，若总代价下降则接受，迭代直到无改进。
-   - **退化情况**：所有 Hamilton 环都含 ∞ 边 → 装配失败。
+4. **Ring 搜索（DFS + 剪枝 + 链路带宽消耗）**：在代价矩阵上找一条总代价最小的 Hamilton 环。
+   - **基本框架（DFS + 剪枝）**：N ≤ 16，从 rank 0 出发递归选下一个未访问节点；维护当前路径累计代价 `acc`，若 `acc + 剩余下界估计 ≥ 已知最优解` 则回溯。剩余下界用"剩余未访问节点各自最小出边和"估算。固定起点 rank 0 打破环的 N 重旋转对称；只搜环的一个方向打破镜像对称。
+   - **链路带宽消耗（核心设计）**：每条物理链路（PBLink wire / PCIe switch port）维护一个 `remaining[i][j]` 剩余带宽（初始 100%），cost 表中的 `cost[i][j]` 与 `remaining[i][j]` 反比关联——剩余越少 cost 越高。每个 channel / block 选边时声明自己消耗多少带宽（例如一个 channel 只占 PBLink 20%，或保守按 50% 计），选边后按"已用比例"提升该边 cost：物理链路并未"被独占"，可以继续被后续选择复用，但每次复用 cost 都会再次抬升；剩余带宽消耗到 0 时 cost 升至 `∞`，DFS 自动跳过。这样既适配"单 channel 打不满整条链路"的常见情况，又在多 channel / 多 ring 共享物理链路时让搜索自动倾向于带宽未被占满的边，避免局部超额分配。回溯时同步恢复 `remaining` 与 `cost`，保证 branch-and-bound 完备性。
+   - **示例（N = 4，环 0→1→2→3→0，每 channel 占 50% 带宽）**：DFS 依次选 (r0→r1, base=1) → cost 升为 2；(r1→r2, base=5) → cost 升为 10；(r2→r3, base=1) → cost 升为 2；(r3→r0, base=50) → cost 升为 100；累计 `acc = 1 + 5 + 1 + 50 = 57`（acc 使用选边时的当前 cost，而非更新后的）。后续若 ch1 反向 Ring 在同一矩阵继续搜索，已被消耗 50% 的 PBLink 边代价已经翻倍，搜索倾向于选剩余 100% 的其它边；若两 channel 都选同一条 PBLink → 该边剩余 = 0 → 后续任何 channel 都无法再用。
+   - **简化兜底（贪心 + 2-opt）**：DFS 超时退回贪心——从 rank 0 出发每步选剩余 GPU 中当前 `cost` 最小的邻居，同样按比例消耗带宽；环形闭合后做一次 2-opt：对每两条非相邻边 `(a-b, c-d)` 尝试换成 `(a-c, b-d)`，若总代价下降则接受（交换时需恢复换出边的带宽、消耗换入边的带宽），迭代直到无改进。
+   - **退化情况**：所有可达分支累积消耗后剩余带宽不足以闭合环（cost 全部到 ∞）→ 回溯耗尽 → 装配失败。
+
+    > **备注：1. 当前nchannel手动配置。NCCL采用其他算法确定最合适的channel数； 2. 未考虑复杂PCIe switch场景：两个GPU之间占用多条物理链路。**
 
 5. **环合法性校验**：扫描搜出的环上 N 条边——
    - `cost = 1 / 5 / 10 / 50`：边可用，运行期由 transport 走 P2P（前两类通常落到 NVLink / PBLink，后两类落到 PCIe Peer）。
@@ -333,26 +378,18 @@ stateDiagram-v2
 
 7. **结果落地**：把两份 ring 序列写入 `comm->channels[0..1].ring.{prev, next, userRanks}`；graph 模块工作完成，运行期不再调用任何 graph 代码。
 
-**典型拓扑下的搜索结果**（用于设计自检）：
-
-| 拓扑形态 | 算法选出的环 |
-|---|---|
-| 8 GPU 全 PBLink 直连 | 任意顺序均可，所有边 `cost = 1`；DFS 第一个解即可 |
-| HGX 8 GPU（4+4 over PBLink Bridge） | 优先走 PBLink Bridge 形成跨 4 卡环，剩余卡按 PBLink 直连相邻 |
-| 2×CPU 各挂 4 GPU 全 PCIe | 同一 CPU 下的 4 卡先串联，再用一条跨 CPU 边闭环（最坏情形仅 1 条 `cost = 50` 边） |
-
-代价模型仅在装配期使用，运行期 GPU kernel 看到的就是一份"prev / next 邻居"序列。本期采用"单条搜索结果 + 前向 / 反向双 channel"的形式占用 PBLink 双向带宽；不做 Tree 算法或多条独立 ring 的并行搜索，这些更精细的拓扑利用率优化（多 ring 并行 / sub-cluster 拆分等）留作后续版本。
+> **代价模型仅在装配期使用，运行期 GPU kernel 看到的就是一份"prev / next 邻居"序列**。
 
 #### 6.3.4 transport 模块
 
 **模块定位**：transport 在装配期建立 peer 间的数据通路。具体做法是把对端 rank 的 GPU buffer（P2P 路径，通过 CUDA IPC）或 SHM 段（备用路径，通过 `/dev/shm` mmap）映射到本端的虚拟地址空间，使本端 GPU 可以通过普通指针直接 `store / load` 远端 buffer。装配完成后，运行期 device kernel 直接通过这些虚拟地址访问对端 ringbuf，transport 层不再参与。
 
 **要做的工作**：
-- **后端选择**：对每对 peer 决定走 P2P（CUDA IPC + PBLink，主路径）还是 SHM（`/dev/shm` mmap，备用路径）；决策结果写入 `channels[c].peers[p].transport`，运行期不再判断。
+- **后端选择**：**判断每个channel每对 peer 决定走 P2P（CUDA IPC + PBLink/PCIe，主路径）还是 SHM（`/dev/shm` mmap，备用路径）**；决策结果写入 `channels[c].peers[p].transport`，运行期不再判断。
 - **导出本端 buffer**：分配 ringbuf 显存（P2P）或 SHM 段（SHM 后端），并导出对应 handle / 路径。
-- **交换 handle**：通过 bootstrap 提供的字节包通道与对端交换 handle / 路径。
+- **交换 handle**：通过**bootstrap**提供的字节包通道与对端交换 handle / 路径，例如在channel 0上 GPU0 向 GPU1发送数据，GPU1 则将申请ringbuf缓冲区，获取handle通过UDS发送给GPU 0。
 - **映射对端 buffer**：把对端的 handle / 路径变成本端可访问的虚拟地址。
-- **连接落地**：把"本端 buffer 指针 + 对端 buffer 指针 + head/tail 计数器地址"四要素写入 `channels[c].peers[p].{connSend, connRecv}`，运行期 kernel 直接读这些字段。
+- **连接落地（两阶段）**：先把"本端 / 对端 buffer 指针 + head/tail 计数器地址"写入 host 端 `channels[c].peers[p].{connSend, connRecv}`；再由 init / commLifecycle 模块（§6.3.2 Step 5）把这些指针打包进 `ncclDevComm` 结构、`cudaMemcpyAsync` 拷到 GPU HBM。运行期 kernel 通过 `ncclShmem.comm` 读到这些指针后才能 dereference 访问真正的 ringbuf 与计数器——**指针必须先在 HBM 上，kernel 才看得到**。
 
 **输入与输出**：
 
@@ -364,7 +401,7 @@ stateDiagram-v2
 
 **装配期实现步骤**（在 `commInit` 的 connect 阶段执行，对 channels × peers 二重循环）：
 
-1. **后端选择**：对每对（本 rank, peer rank）调 `cudaDeviceCanAccessPeer`——
+1. **后端选择**：对每channel每对（本 rank, peer rank）调 `cudaDeviceCanAccessPeer`——
    - 返回真 → 走 P2P (CUDA IPC + PBLink)
    - 返回假 → 降级 SHM
    - 决策结果写入 `channels[c].peers[p].transport`，运行期 kernel 不再判断；后端选择用条件分支表达，两分支足够直观，不引入 vtable 多态。
@@ -375,10 +412,18 @@ stateDiagram-v2
 4. **映射对端 buffer**：
    - **P2P 分支**：`cudaIpcOpenMemHandle(对端 handle)` → 得到本地虚拟地址。
    - **SHM 分支**：`open(对端发来的路径)` → `mmap` → 本地虚拟地址。
-5. **连接落地**：把以下指针写入 `channels[c].peers[p]`：
-   - `connSend.buffs`：本端 buffer 指针（对端从这里读）
-   - `connSend.tail` / `connRecv.head`：Simple 协议同步计数器地址
-   - `connRecv.buffs`：对端 buffer 指针（本端从这里读）
+5. **连接落地（host 端）**：把以下指针写入 host 端 `comm->channels[c].peers[p]`：
+   - `connSend.buffs`：写入侧使用的远端 buffer 地址——CUDA IPC 映射到本地 VA 的 receiver HBM 地址（P2P）或 mmap 到本地 VA 的 SHM 地址；本端 GPU 通过它远程写入 receiver。
+   - `connRecv.buffs`：读出侧使用的本地 buffer 地址——本端作为 receiver 时，就是自己 `cudaMalloc` 出来的 HBM 地址；本端 GPU 从这里本地读取。
+   - `connSend.tail`：Simple 协议中"写者推进、读者 spin"的 tail 计数器虚拟地址（位于 receiver HBM）。
+   - `connRecv.head`：Simple 协议中"读者推进、写者 spin"的 head 计数器虚拟地址（位于 writer HBM）。
+   - **本步只写 host 内存，GPU kernel 此时还看不到这些指针**。
+
+6. **指针下发到 HBM（与 §6.3.2 Step 5 协同）**：transport 完成 host 端写入后，init / commLifecycle 接管：
+   - 把 `channels[*].peers[*]` 中 kernel 运行期会用到的字段（ringbuf 指针、tail / head 地址、ring 邻居 prev/next、abortFlag 指针）打包到 `ncclDevComm` 结构。
+   - `cudaMalloc` 在 GPU HBM 分配 `ncclDevComm` 空间 → `cudaMemcpyAsync` 把 host 打包好的结构拷到 GPU 端 → `comm->devComm` 记下 GPU 端地址。
+   - enqueue 在 launch kernel 时把 `comm->devComm` 作为 kernel 参数传入；kernel 启动后通过 `ncclShmem.comm` 引用 `ncclDevComm`，从 HBM 读出这些指针，再 dereference 访问真正的 ringbuf / 计数器。
+   - **关键约束**：所有"GPU 端取指针"的动作必须落在 HBM 上才能成立。HBM 上存放的是**指针值（虚拟地址）**；指针指向的实际 ringbuf 数据 / 计数器，按后端落在 receiver HBM（P2P）或 host pinned / SHM（SHM 后端通过 `cudaHostRegister` 注册后也能从 device 访问）。
 
 **ringbuf 布局**（每对相邻 rank、每方向、每 channel 一份）：
 
@@ -396,14 +441,7 @@ stateDiagram-v2
 
 #### 6.3.5 enqueue 模块
 
-**模块定位**：enqueue 是运行期 host 侧的实现入口。每次用户调 `ncclAllReduce`，都进入这个模块，按固定四步执行：参数校验 → 查 chunkSize / nChannels 档位表 → 填工作描述符 → 调 `cudaLaunchKernel`。本模块不做任何运行时决策、不做 host 侧通信、不做内存分配——这些工作都已在装配期完成。
-
-**要做的工作**：
-- **参数校验**：检查 `comm` 状态、`count` / `dtype` / `op`、`sendbuff` / `recvbuff` 等是否合法。
-- **chunkSize / nChannels 查表**：按消息字节数落入装配期已建好的档位表，直接取数，不做现场计算。
-- **填工作描述符**：把用户参数 + 查表结果写入 `ncclWorkElem` 结构。
-- **launch kernel**：调 `cudaLaunchKernel` 把 kernel 推到用户传入的 `stream` 上。
-- **立即返回 `ncclSuccess`**：API 返回 ≠ 操作完成；完成由 stream 提供（用户 `cudaStreamSynchronize` 后 `recvbuff` 才可见）。
+**模块定位**：enqueue 是运行期 host 侧的实现入口。每次用户调 `ncclAllReduce`，都进入这个模块，按固定四步执行：参数校验 → 查档位表得到 `(nChannels, nThreads)` 并派生 chunkSize → 填工作描述符 → 调 `cudaLaunchKernel`。本模块不做任何运行时决策、不做 host 侧通信、不做内存分配——这些工作都已在装配期完成。
 
 **输入与输出**：
 
@@ -416,31 +454,33 @@ stateDiagram-v2
 **单次调用按顺序执行**：
 
 1. **参数校验**：`comm` 非空、`comm->state == Active`、`count > 0`、`sendbuff/recvbuff` 非空、`dtype/op` 在支持集合内。失败立即返回 `ncclInvalidArgument`。
-2. **chunkSize / nChannels 查表**：按 `count × sizeof(dtype)` 落入装配期已构建的档位表（典型 4~6 档：`≤1KB / 1KB~64KB / 64KB~1MB / 1MB~16MB / >16MB`），直接取出 `(chunkSize, nChannels)`。
-3. **填工作描述符**：把 `(sendbuff, recvbuff, count, chunkSize, nChannels, ...)` 写入栈上的 `ncclWorkElem`，作为 kernel argument 传入（或经常驻 device buffer 中转）。
-4. **launch kernel**：调 `cudaLaunchKernel(ncclKernel_AllReduce_Ring_Simple_Sum_f32)`，`grid.x = nChannels`，`block.x = nthreads`，绑定到用户传入的 `stream`。
-5. **立即返回 `ncclSuccess`**：仅表示"入队成功"；完成语义由 stream 提供（`cudaStreamSynchronize` 后 `recvbuff` 可读）。
+2. **`(nChannels, nThreads)` 查表**：装配期填好 `comm->maxThreads[algorithm][protocol]` 二维表与每档 nChannels 上限；运行期按 `count × sizeof(dtype)` 落档直接取出 `(nChannels, nThreads)`——本期 algorithm/protocol 固定为 `(Ring, Simple)`，等价于按消息字节数索引一维档位表（典型 4~6 档：`≤1KB / 1KB~64KB / 64KB~1MB / 1MB~16MB / >16MB`）。
+3. **chunkSize 派生**：由公式 `chunkSize = buffSize / NCCL_STEPS × chunkSteps` 计算（`buffSize` 与 `chunkSteps` 均在装配期由协议 / 显存预算固定），再按 `nBytes / (nChannels × chunkSize) < 阈值` 做最多 3 轮 halve 微调；保证最后一个 chunk 不浪费且对齐到 `(nThreads − WARP_SIZE) × sizeof(uint64_t)`。
+4. **填工作描述符**：把 `(sendbuff, recvbuff, count, chunkSize, nChannels, nThreads, ...)` 写入栈上的 `ncclWorkElem`，作为 kernel argument 传入（或经常驻 device buffer 中转）。
+5. **launch kernel**：调 `cudaLaunchKernel(ncclKernel_AllReduce_Ring_Simple_Sum_f32)`，`grid.x = nChannels`，`block.x = nThreads`，绑定到用户传入的 `stream`。
+6. **立即返回 `ncclSuccess`**：仅表示"入队成功"；完成语义由 stream 提供（`cudaStreamSynchronize` 后 `recvbuff` 可读）。
 
 算法 + 协议固定为 Ring + Simple，无运行时选择；本期不支持 Group 聚合（多原语一次入队）、不支持 CUDA Graph capture。
 
-**档位表的填充因子**（均在装配期确定）：
+**档位表与派生公式的相关参数**（均在装配期确定）：
 
-| 因子 | 含义 | 影响 |
+| 相关参数 | 含义 | 影响 |
 |---|---|---|
-| `buffSize`（Simple 协议 ringbuf 大小）| `commInit` 中按显存预算固定（典型 4MB / channel） | chunkSize 上界 = `buffSize / NCCL_STEPS` |
-| `nthreads` | 每 channel 的 thread 数（典型 256 或 512）| chunkSize 需对齐到 `(nthreads - WARP_SIZE) * sizeof(uint64_t)` |
+| `maxThreads[algo][proto]` | 装配期填好的"线程数上限"二维表 | 查表直接得 `nThreads`（本期 `[Ring][Simple]` 一项即可，典型 256 或 512）|
+| `buffSize`（Simple 协议 ringbuf 大小）| `commInit` 中按显存预算固定（典型 4MB / channel） | chunkSize 派生上界 = `buffSize / NCCL_STEPS` |
+| `chunkSteps` | 协议常量（Simple AllReduce 通常 = 2）| 与 `buffSize / NCCL_STEPS` 相乘得 chunkSize 初值 |
 | `nChannels` | 本节点 channel 数（本期固定 2）| 总数据按 `nChannels × nRanks × chunkSize` 分片 |
-| 消息字节数 `count × sizeof(dtype)` | 用户传入 | 决定落在哪一档；保证 chunk 划分能覆盖所有元素且最后一步不浪费 |
+| 消息字节数 `count × sizeof(dtype)` | 用户传入 | 决定落在哪一档；同时驱动 chunkSize 的 halve 微调 |
 
-**档位表形态示例**（具体数值由详设阶段实测确定，此处仅说明结构）：
+**档位表形态示例**（仅说明结构，具体数值由详设阶段实测确定）：
 
-| 消息字节数 | chunkSize | nChannels |
+| 消息字节数 | nChannels | nThreads |
 |---|---|---|
-| ≤ 1 KB | 1 KB | 1 |
-| 1 KB ~ 64 KB | 16 KB | 2 |
-| 64 KB ~ 1 MB | 64 KB | 2 |
-| 1 MB ~ 16 MB | 256 KB | 2 |
-| > 16 MB | 512 KB | 2 |
+| ≤ 1 KB | 1 | 256 |
+| 1 KB ~ 64 KB | 1 | 256 |
+| 64 KB ~ 1 MB | 2 | 256 |
+| 1 MB ~ 16 MB | 2 | 512 |
+| > 16 MB | 2 | 512 |
 
 **异步性边界**：API 返回 ≠ 操作完成；完成可见性需要用户通过 stream 同步获得，与 CUDA stream 的标准语义对齐。
 
@@ -552,7 +592,7 @@ __global__ void ncclKernel_AllReduce_Ring_Simple_Sum_f32(ncclWorkElem* args) {
 
 ### 7.1 流程一：Communicator 初始化
 
-> 图 8-1：init 时序（概念级）
+> 图 7-1：init 时序（概念级）
 
 ```mermaid
 sequenceDiagram
@@ -579,7 +619,7 @@ sequenceDiagram
 
 ### 7.2 流程二：AllReduce 热路径
 
-> 图 8-2：单次 AllReduce 端到端
+> 图 7-2：单次 AllReduce 端到端
 
 ```mermaid
 sequenceDiagram
@@ -591,7 +631,7 @@ sequenceDiagram
 
   App->>Sched: allReduce(send, recv, count, dtype, op, comm, stream)
   Sched->>Sched: 参数校验
-  Sched->>Sched: 选定 chunkSize / nChannels (查表)
+  Sched->>Sched: 查表得 (nChannels, nThreads) + 派生 chunkSize
   Sched->>Sched: 填工作描述符
   Sched->>Kern: cudaLaunchKernel (nChannels 个 block)
   Sched-->>App: ncclSuccess (仅 enqueue)
@@ -611,7 +651,7 @@ sequenceDiagram
 
 ### 7.3 流程三：异常退出
 
-> 图 8-3：abortFlag / fatalError 两阶段（保留）
+> 图 7-3：abortFlag / fatalError 两阶段（保留）
 
 ```mermaid
 sequenceDiagram

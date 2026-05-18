@@ -97,7 +97,7 @@
 
     <rect x="510" y="520" width="330" height="90" fill="#86efac" rx="4"/>
     <text x="675" y="555" text-anchor="middle" font-size="13" font-weight="bold" fill="#14532d">P2P (主路径)</text>
-    <text x="675" y="582" text-anchor="middle" font-size="10" fill="#14532d">CUDA IPC + PBLink</text>
+    <text x="675" y="582" text-anchor="middle" font-size="10" fill="#14532d">CUDA IPC + PBLink / PCIe</text>
 
     <rect x="860" y="520" width="330" height="90" fill="#86efac" rx="4"/>
     <text x="1025" y="555" text-anchor="middle" font-size="13" font-weight="bold" fill="#14532d">SHM (备用路径)</text>
@@ -121,17 +121,17 @@
 
     <rect x="510" y="690" width="330" height="75" fill="#c4b5fd" rx="4"/>
     <text x="675" y="720" text-anchor="middle" font-size="13" font-weight="bold" fill="#4c1d95">search</text>
-    <text x="675" y="745" text-anchor="middle" font-size="10" fill="#4c1d95">按 busId 排序成环</text>
+    <text x="675" y="745" text-anchor="middle" font-size="10" fill="#4c1d95">代价矩阵 + DFS 搜 Hamilton 环</text>
 
     <rect x="860" y="690" width="330" height="75" fill="#c4b5fd" rx="4"/>
     <text x="1025" y="720" text-anchor="middle" font-size="13" font-weight="bold" fill="#4c1d95">connect</text>
-    <text x="1025" y="745" text-anchor="middle" font-size="10" fill="#4c1d95">建连 · 填 channels</text>
+    <text x="1025" y="745" text-anchor="middle" font-size="10" fill="#4c1d95">交换 IPC handle · 填 channels</text>
 
     <text x="158" y="785" font-size="10" font-style="italic" fill="#6d28d9">— 运行时基础</text>
 
     <rect x="160" y="795" width="330" height="60" fill="#c4b5fd" rx="4"/>
     <text x="325" y="820" text-anchor="middle" font-size="13" font-weight="bold" fill="#4c1d95">bootstrap</text>
-    <text x="325" y="842" text-anchor="middle" font-size="10" fill="#4c1d95">文件 / UDS 会合</text>
+    <text x="325" y="842" text-anchor="middle" font-size="10" fill="#4c1d95">UDS 同步握手</text>
 
     <rect x="510" y="795" width="330" height="60" fill="#c4b5fd" rx="4"/>
     <text x="675" y="820" text-anchor="middle" font-size="13" font-weight="bold" fill="#4c1d95">comm 初始化</text>

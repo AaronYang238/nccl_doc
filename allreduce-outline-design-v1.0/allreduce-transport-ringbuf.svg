@@ -79,15 +79,15 @@
     <text x="1075" y="260" text-anchor="middle" font-size="10" fill="#14532d">对端 GPU</text>
     <text x="1075" y="275" text-anchor="middle" font-size="10" fill="#14532d">(recv 侧)</text>
 
-    <!-- Tail pointer -->
-    <text x="600" y="180" text-anchor="middle" font-size="12" font-weight="bold" fill="#c2410c">tail 当前值 = 4 (= step + 1)</text>
-    <text x="600" y="197" text-anchor="middle" font-size="10" fill="#c2410c">写者完成 slot 3 后 fence + 写 tail（值存储在 tail 计数器中，见下）</text>
+    <!-- Tail pointer (writer 推进；箭头从 Writer 框出发) -->
+    <text x="380" y="180" text-anchor="middle" font-size="12" font-weight="bold" fill="#c2410c">tail = 4（写者推进，箭头从 Writer 出发）</text>
+    <text x="380" y="197" text-anchor="middle" font-size="10" fill="#c2410c">写者完成 slot 3 后 fence + 写 tail 计数器（位于 receiver HBM）</text>
     <line x1="180" y1="208" x2="595" y2="208" stroke="#c2410c" stroke-width="2" marker-end="url(#arr-orange)"/>
 
-    <!-- Head pointer -->
-    <text x="450" y="325" text-anchor="middle" font-size="12" font-weight="bold" fill="#1d4ed8">head 当前值 = 2</text>
-    <text x="450" y="342" text-anchor="middle" font-size="10" fill="#1d4ed8">读者读完 slot 0/1 后写 head 释放（值存储在 head 计数器中，见下）</text>
-    <line x1="180" y1="295" x2="445" y2="295" stroke="#1d4ed8" stroke-width="2" marker-end="url(#arr-blue)"/>
+    <!-- Head pointer (reader 推进；箭头从 Reader 框出发，向左指向当前位置) -->
+    <text x="730" y="325" text-anchor="middle" font-size="12" font-weight="bold" fill="#1d4ed8">head = 2（读者推进，箭头从 Reader 出发）</text>
+    <text x="730" y="342" text-anchor="middle" font-size="10" fill="#1d4ed8">读者读完 slot 0 / 1 后写 head 计数器释放（位于 writer HBM）</text>
+    <line x1="1015" y1="295" x2="445" y2="295" stroke="#1d4ed8" stroke-width="2" marker-end="url(#arr-blue)"/>
 
     <line x1="595" y1="220" x2="595" y2="280" stroke="#c2410c" stroke-width="2" stroke-dasharray="3 2"/>
     <line x1="445" y1="220" x2="445" y2="280" stroke="#1d4ed8" stroke-width="2" stroke-dasharray="3 2"/>
@@ -154,12 +154,12 @@
     <text x="1140" y="753" text-anchor="middle" font-size="10" fill="#14532d">(对端 GPU)</text>
 
     <!-- ═════ ch0 group (top): A → B ═════ -->
-    <text x="640" y="785" text-anchor="middle" font-size="12" font-weight="bold" fill="#c2410c">━━━━━━ ch0 前向（ring 中 A.next = B，A 写、B 读）━━━━━━</text>
+    <text x="640" y="785" text-anchor="middle" font-size="12" font-weight="bold" fill="#c2410c">━━━━━━ ch0 前向（A → B：A 远程写入 B 的 HBM，B 本地读取）━━━━━━</text>
 
-    <!-- ch0 ringbuf (owner A) -->
+    <!-- ch0 ringbuf (owner = B, receiver's HBM) -->
     <g>
       <rect x="280" y="795" width="720" height="85" fill="#fed7aa" stroke="#c2410c" stroke-width="1.5" rx="4"/>
-      <text x="640" y="817" text-anchor="middle" font-size="12" font-weight="bold" fill="#9a3412">ringbuf-ch0（owner = A，物理 buffer 在 A 端）</text>
+      <text x="640" y="817" text-anchor="middle" font-size="12" font-weight="bold" fill="#9a3412">ringbuf-ch0　📍 owner = Rank B（buffer 分配在 B 的 HBM）</text>
 
       <!-- mini slot row -->
       <g>
@@ -178,22 +178,22 @@
         <text x="817" y="846" text-anchor="middle" font-size="9" fill="#7c2d12">head u64</text>
       </g>
 
-      <text x="640" y="870" text-anchor="middle" font-size="9" fill="#9a3412">B 端：通过 cudaIpcOpenMemHandle / mmap 映射 A 的 buffer → 普通虚拟地址读取，无独立分配</text>
+      <text x="640" y="870" text-anchor="middle" font-size="9" fill="#9a3412">A 端：通过 cudaIpcOpenMemHandle 映射 B 的 buffer → 远程写入；B 端从本地 HBM 读取（不分配独立 buffer）</text>
     </g>
 
-    <!-- ch0 data flow arrow A → B -->
+    <!-- ch0 data flow arrow A → B (A 远程写 → B 本地读) -->
     <line x1="220" y1="838" x2="280" y2="838" stroke="#c2410c" stroke-width="2.5" marker-end="url(#arr-orange)"/>
-    <text x="250" y="828" text-anchor="middle" font-size="9" fill="#c2410c">写</text>
+    <text x="250" y="828" text-anchor="middle" font-size="9" fill="#c2410c">远程写</text>
     <line x1="1000" y1="838" x2="1060" y2="838" stroke="#c2410c" stroke-width="2.5" marker-end="url(#arr-orange)"/>
-    <text x="1030" y="828" text-anchor="middle" font-size="9" fill="#c2410c">读</text>
+    <text x="1030" y="828" text-anchor="middle" font-size="9" fill="#c2410c">本地读</text>
 
     <!-- ═════ ch1 group (bottom): B → A ═════ -->
-    <text x="640" y="910" text-anchor="middle" font-size="12" font-weight="bold" fill="#7c3aed">━━━━━━ ch1 反向（ring 反转后 B.next = A，B 写、A 读）━━━━━━</text>
+    <text x="640" y="910" text-anchor="middle" font-size="12" font-weight="bold" fill="#7c3aed">━━━━━━ ch1 反向（B → A：B 远程写入 A 的 HBM，A 本地读取）━━━━━━</text>
 
-    <!-- ch1 ringbuf (owner B) -->
+    <!-- ch1 ringbuf (owner = A, receiver's HBM in reverse direction) -->
     <g>
       <rect x="280" y="920" width="720" height="85" fill="#ede9fe" stroke="#7c3aed" stroke-width="1.5" rx="4"/>
-      <text x="640" y="942" text-anchor="middle" font-size="12" font-weight="bold" fill="#5b21b6">ringbuf-ch1（owner = B，物理 buffer 在 B 端）</text>
+      <text x="640" y="942" text-anchor="middle" font-size="12" font-weight="bold" fill="#5b21b6">ringbuf-ch1　📍 owner = Rank A（buffer 分配在 A 的 HBM）</text>
 
       <g>
         <rect x="295" y="955" width="50" height="22" fill="#ddd6fe" stroke="#5b21b6" stroke-width="0.8"/>
@@ -211,17 +211,17 @@
         <text x="817" y="971" text-anchor="middle" font-size="9" fill="#4c1d95">head u64</text>
       </g>
 
-      <text x="640" y="995" text-anchor="middle" font-size="9" fill="#5b21b6">A 端：通过 cudaIpcOpenMemHandle / mmap 映射 B 的 buffer → 普通虚拟地址读取，无独立分配</text>
+      <text x="640" y="995" text-anchor="middle" font-size="9" fill="#5b21b6">B 端：通过 cudaIpcOpenMemHandle 映射 A 的 buffer → 远程写入；A 端从本地 HBM 读取（不分配独立 buffer）</text>
     </g>
 
-    <!-- ch1 data flow arrow B → A -->
+    <!-- ch1 data flow arrow B → A (B 远程写 → A 本地读) -->
     <line x1="280" y1="963" x2="220" y2="963" stroke="#7c3aed" stroke-width="2.5" marker-end="url(#arr-purple)"/>
-    <text x="250" y="953" text-anchor="middle" font-size="9" fill="#7c3aed">读</text>
+    <text x="250" y="953" text-anchor="middle" font-size="9" fill="#7c3aed">本地读</text>
     <line x1="1060" y1="963" x2="1000" y2="963" stroke="#7c3aed" stroke-width="2.5" marker-end="url(#arr-purple)"/>
-    <text x="1030" y="953" text-anchor="middle" font-size="9" fill="#7c3aed">写</text>
+    <text x="1030" y="953" text-anchor="middle" font-size="9" fill="#7c3aed">远程写</text>
 
     <!-- Bottom summary -->
-    <text x="50" y="1035" font-size="10" fill="#374151">📊 每对 (A, B)：2 份 ringbuf（每个 channel 一份，方向相反）；A 持有 ringbuf-ch0、B 持有 ringbuf-ch1</text>
+    <text x="50" y="1035" font-size="10" fill="#374151">📊 ringbuf owner 归属规则：永远分配在 receiver 的 HBM 上 → ch0 (A→B) 由 B 持有；ch1 (B→A) 由 A 持有。writer 通过 CUDA IPC 把 receiver 的 buffer 映射到本地虚拟地址，做远程写入；receiver 从本地 HBM 读，spin 等 tail 推进。</text>
     <text x="50" y="1052" font-size="10" fill="#374151">🔁 channel 是单向概念：ch0 与 ch1 通过 ring 方向相反共同占用 PBLink 两个物理方向，无需为单个 channel 分配双向 buffer</text>
   </g>
 

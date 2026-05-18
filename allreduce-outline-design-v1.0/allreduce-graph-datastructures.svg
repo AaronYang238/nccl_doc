@@ -1,0 +1,177 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 530" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', 'Helvetica Neue', Arial, sans-serif">
+  <rect width="1280" height="530" fill="#fafafa"/>
+
+  <!-- ===== Title ===== -->
+  <text x="640" y="30" text-anchor="middle" font-size="18" font-weight="bold" fill="#1f2937">graph 模块 — 关键数据结构</text>
+  <text x="640" y="52" text-anchor="middle" font-size="11" fill="#4b5563">三类核心数据结构：① XML 拓扑文件（输入） ② cost 矩阵（中间产物） ③ ncclRing（输出）</text>
+
+  <!-- ===== Data Structure 1: XML topology ===== -->
+  <g>
+    <rect x="30" y="70" width="400" height="430" fill="#ecfdf5" stroke="#10b981" stroke-width="2" rx="6"/>
+    <text x="230" y="96" text-anchor="middle" font-size="13" font-weight="bold" fill="#065f46">① XML 拓扑文件结构</text>
+    <text x="230" y="113" text-anchor="middle" font-size="9" font-style="italic" fill="#065f46">首次启动由 graph 现场扫描 NVML / sysfs 生成；落盘后下次直接读取</text>
+
+    <!-- Code block background -->
+    <rect x="45" y="125" width="370" height="295" fill="#ffffff" stroke="#a7f3d0" stroke-width="1" rx="3"/>
+
+    <!-- Code lines (monospace via font-family override; xml:space="preserve" 保留前导缩进) -->
+    <g font-family="'Consolas','SF Mono','Menlo',monospace" font-size="9" fill="#065f46" xml:space="preserve">
+      <text x="55" y="140">&lt;system version="1"&gt;</text>
+      <text x="55" y="153">&#160;&#160;&lt;cpu numaid="0" arch="x86_64"&gt;</text>
+      <text x="55" y="166">&#160;&#160;&#160;&#160;&lt;pci busid="0000:18:00.0" class="0x060400"&gt;&#160;&#160;&#160;&lt;!-- switch --&gt;</text>
+      <text x="55" y="179">&#160;&#160;&#160;&#160;&#160;&#160;&lt;pci busid="0000:1a:00.0" class="0x030200"&gt;&#160;&lt;!-- GPU 0 --&gt;</text>
+      <text x="55" y="192">&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&lt;gpu dev="0" sm="80" rank="0" gdr="1"&gt;</text>
+      <text x="55" y="205">&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&lt;pblink target="0000:1c:00.0" count="2"/&gt;</text>
+      <text x="55" y="218">&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&lt;pblink target="0000:1e:00.0" count="2"/&gt;</text>
+      <text x="55" y="231" fill="#0f766e">&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;...&#160;&#160;&lt;!-- 与其它 6 卡逐一相连 --&gt;</text>
+      <text x="55" y="244">&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&lt;/gpu&gt;</text>
+      <text x="55" y="257">&#160;&#160;&#160;&#160;&#160;&#160;&lt;/pci&gt;</text>
+      <text x="55" y="270">&#160;&#160;&#160;&#160;&#160;&#160;&lt;pci busid="0000:1c:00.0" class="0x030200"&gt;&#160;&lt;!-- GPU 1 --&gt;</text>
+      <text x="55" y="283">&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&lt;gpu dev="1" sm="80" rank="1" gdr="1"&gt; ... &lt;/gpu&gt;</text>
+      <text x="55" y="296">&#160;&#160;&#160;&#160;&#160;&#160;&lt;/pci&gt;</text>
+      <text x="55" y="309" fill="#0f766e">&#160;&#160;&#160;&#160;&#160;&#160;...&#160;&#160;&lt;!-- GPU 2, 3 同构 --&gt;</text>
+      <text x="55" y="322">&#160;&#160;&#160;&#160;&lt;/pci&gt;</text>
+      <text x="55" y="335">&#160;&#160;&lt;/cpu&gt;</text>
+      <text x="55" y="348">&#160;&#160;&lt;cpu numaid="1" arch="x86_64"&gt;</text>
+      <text x="55" y="361" fill="#0f766e">&#160;&#160;&#160;&#160;...&#160;&#160;&lt;!-- 对称结构,挂 GPU 4-7 --&gt;</text>
+      <text x="55" y="374">&#160;&#160;&lt;/cpu&gt;</text>
+      <text x="55" y="387">&lt;/system&gt;</text>
+    </g>
+
+    <!-- Notes -->
+    <text x="45" y="440" font-size="10" font-weight="bold" fill="#065f46">关键字段（参考 nccl-topo-template.xml）：</text>
+    <text x="45" y="457" font-size="9" fill="#065f46">• 层级嵌套：&lt;cpu&gt;(numaid) → &lt;pci&gt;(switch) → &lt;pci&gt;(GPU endpoint) → &lt;gpu&gt;</text>
+    <text x="45" y="473" font-size="9" fill="#065f46">• &lt;pblink target="..." count="..."/&gt;：嵌入 &lt;gpu&gt; 内的 mesh 边</text>
+    <text x="45" y="489" font-size="9" fill="#065f46">• graph 解析后得到拓扑树 + 每张 GPU 的邻接边集合</text>
+  </g>
+
+  <!-- ===== Data Structure 2: cost matrix ===== -->
+  <g>
+    <rect x="450" y="70" width="380" height="430" fill="#eef2ff" stroke="#6366f1" stroke-width="2" rx="6"/>
+    <text x="640" y="96" text-anchor="middle" font-size="13" font-weight="bold" fill="#312e81">② cost[N][N] 代价矩阵</text>
+    <text x="640" y="113" text-anchor="middle" font-size="9" font-style="italic" fill="#312e81">N=4 示例：2 PBLink-pair + 跨 NUMA 边</text>
+
+    <!-- Matrix background -->
+    <rect x="475" y="130" width="330" height="125" fill="#ffffff" stroke="#a5b4fc" stroke-width="1" rx="3"/>
+
+    <!-- Grid lines (subtle) -->
+    <line x1="540" y1="138" x2="540" y2="247" stroke="#c7d2fe" stroke-width="0.5"/>
+    <line x1="485" y1="160" x2="795" y2="160" stroke="#c7d2fe" stroke-width="0.5"/>
+
+    <!-- Diagonal highlights -->
+    <rect x="551" y="168" width="28" height="16" fill="#fbbf24" fill-opacity="0.35" rx="2"/>
+    <rect x="611" y="186" width="28" height="16" fill="#fbbf24" fill-opacity="0.35" rx="2"/>
+    <rect x="671" y="204" width="28" height="16" fill="#fbbf24" fill-opacity="0.35" rx="2"/>
+    <rect x="731" y="222" width="28" height="16" fill="#fbbf24" fill-opacity="0.35" rx="2"/>
+
+    <!-- Chosen edge highlights for ring 0→1→2→3→0 (DFS demo)；选中后扣减为 ∞ -->
+    <rect x="611" y="168" width="28" height="16" fill="#34d399" fill-opacity="0.45" rx="2"/>
+    <rect x="671" y="186" width="28" height="16" fill="#34d399" fill-opacity="0.45" rx="2"/>
+    <rect x="731" y="204" width="28" height="16" fill="#34d399" fill-opacity="0.45" rx="2"/>
+    <rect x="551" y="222" width="28" height="16" fill="#34d399" fill-opacity="0.45" rx="2"/>
+
+    <!-- Column headers -->
+    <g font-family="'Consolas','SF Mono','Menlo',monospace" font-size="11" font-weight="bold" fill="#312e81">
+      <text x="565" y="154" text-anchor="middle">r0</text>
+      <text x="625" y="154" text-anchor="middle">r1</text>
+      <text x="685" y="154" text-anchor="middle">r2</text>
+      <text x="745" y="154" text-anchor="middle">r3</text>
+    </g>
+
+    <!-- Row labels -->
+    <g font-family="'Consolas','SF Mono','Menlo',monospace" font-size="11" font-weight="bold" fill="#312e81">
+      <text x="510" y="180" text-anchor="middle">r0</text>
+      <text x="510" y="198" text-anchor="middle">r1</text>
+      <text x="510" y="216" text-anchor="middle">r2</text>
+      <text x="510" y="234" text-anchor="middle">r3</text>
+    </g>
+
+    <!-- Data cells (row-major) -->
+    <g font-family="'Consolas','SF Mono','Menlo',monospace" font-size="11" fill="#312e81">
+      <!-- Row r0 -->
+      <text x="565" y="180" text-anchor="middle">0</text>
+      <text x="625" y="180" text-anchor="middle">1</text>
+      <text x="685" y="180" text-anchor="middle">5</text>
+      <text x="745" y="180" text-anchor="middle">50</text>
+      <!-- Row r1 -->
+      <text x="565" y="198" text-anchor="middle">1</text>
+      <text x="625" y="198" text-anchor="middle">0</text>
+      <text x="685" y="198" text-anchor="middle">5</text>
+      <text x="745" y="198" text-anchor="middle">50</text>
+      <!-- Row r2 -->
+      <text x="565" y="216" text-anchor="middle">5</text>
+      <text x="625" y="216" text-anchor="middle">5</text>
+      <text x="685" y="216" text-anchor="middle">0</text>
+      <text x="745" y="216" text-anchor="middle">1</text>
+      <!-- Row r3 -->
+      <text x="565" y="234" text-anchor="middle">50</text>
+      <text x="625" y="234" text-anchor="middle">50</text>
+      <text x="685" y="234" text-anchor="middle">1</text>
+      <text x="745" y="234" text-anchor="middle">0</text>
+    </g>
+
+    <!-- Matrix annotations -->
+    <text x="475" y="275" font-size="10" fill="#312e81">↑ 黄色高亮：对角线 cost[i][i] = 0（不参与搜索）</text>
+    <text x="475" y="291" font-size="10" fill="#312e81">↑ 绿色高亮：示例 DFS 选中的 4 条边（环 0→1→2→3→0）</text>
+    <text x="475" y="307" font-size="10" fill="#312e81">↑ ∞ 边：剩余带宽 = 0 时 cost 升至 INT_MAX，DFS 回溯跳过</text>
+
+    <text x="475" y="330" font-size="11" font-weight="bold" fill="#065f46">DFS 搜索 + 链路带宽消耗（每 channel 占 50% 示例）：</text>
+    <g font-size="9.5" fill="#065f46">
+      <text x="475" y="348">① 选 r0→r1：cost = 1，acc = 1；消耗 50% → cost[0][1] ← 2</text>
+      <text x="475" y="364">② 选 r1→r2：cost = 5，acc = 6；消耗 50% → cost[1][2] ← 10</text>
+      <text x="475" y="380">③ 选 r2→r3：cost = 1，acc = 7；消耗 50% → cost[2][3] ← 2</text>
+      <text x="475" y="396">④ 选 r3→r0：cost = 50，acc = 57；消耗 50% → cost[3][0] ← 100</text>
+    </g>
+
+    <text x="475" y="422" font-size="11" font-weight="bold" fill="#312e81">代价值含义 &amp; 链路带宽消耗原则：</text>
+    <g font-size="9.5" fill="#312e81">
+      <text x="475" y="440">1 = PBLink direct | 5 = 同 switch | 10 = 同 CPU | 50 = 跨 NUMA | ∞ = 不可达</text>
+      <text x="475" y="456">• 每选一边按"已用带宽比例"提升其 cost（剩余越少 cost 越高）</text>
+      <text x="475" y="472">• 同一物理链路可被多次选用，但 cost 累计上涨直至带宽耗尽 → ∞</text>
+      <text x="475" y="488">• 回溯时恢复剩余带宽及对应 cost，保证 branch-and-bound 完备性</text>
+    </g>
+  </g>
+
+  <!-- ===== Data Structure 3: ncclRing ===== -->
+  <g>
+    <rect x="850" y="70" width="400" height="430" fill="#fdf4ff" stroke="#a855f7" stroke-width="2" rx="6"/>
+    <text x="1050" y="96" text-anchor="middle" font-size="13" font-weight="bold" fill="#581c87">③ ncclRing 结构 (双向输出)</text>
+    <text x="1050" y="113" text-anchor="middle" font-size="9" font-style="italic" fill="#581c87">每 channel 一份；本期 nChannels = 2（前向 + 反向）</text>
+
+    <!-- Struct definition -->
+    <rect x="865" y="125" width="370" height="100" fill="#ffffff" stroke="#d8b4fe" stroke-width="1" rx="3"/>
+    <g font-family="'Consolas','SF Mono','Menlo',monospace" font-size="10" fill="#581c87">
+      <text x="875" y="144">struct ncclRing {</text>
+      <text x="875" y="160">  int prev;            // 上游邻居 rank</text>
+      <text x="875" y="176">  int next;            // 下游邻居 rank</text>
+      <text x="875" y="192">  int userRanks[N];    // 环上完整 rank 序列</text>
+      <text x="875" y="208">  int index;           // 本 rank 在环中位置</text>
+      <text x="875" y="220">};</text>
+    </g>
+
+    <!-- Forward channel example -->
+    <text x="865" y="245" font-size="11" font-weight="bold" fill="#581c87">channels[0] 前向：r0 → r1 → r2 → r3 → r0</text>
+    <rect x="865" y="252" width="370" height="80" fill="#ffffff" stroke="#d8b4fe" stroke-width="1" rx="3"/>
+    <g font-family="'Consolas','SF Mono','Menlo',monospace" font-size="9.5" fill="#581c87">
+      <text x="875" y="269">rank 0:  prev=3  next=1  userRanks=[0,1,2,3]</text>
+      <text x="875" y="284">rank 1:  prev=0  next=2  userRanks=[1,2,3,0]</text>
+      <text x="875" y="299">rank 2:  prev=1  next=3  userRanks=[2,3,0,1]</text>
+      <text x="875" y="314">rank 3:  prev=2  next=0  userRanks=[3,0,1,2]</text>
+    </g>
+
+    <!-- Reverse channel example -->
+    <text x="865" y="352" font-size="11" font-weight="bold" fill="#581c87">channels[1] 反向：r0 → r3 → r2 → r1 → r0</text>
+    <rect x="865" y="359" width="370" height="80" fill="#ffffff" stroke="#d8b4fe" stroke-width="1" rx="3"/>
+    <g font-family="'Consolas','SF Mono','Menlo',monospace" font-size="9.5" fill="#581c87">
+      <text x="875" y="376">rank 0:  prev=1  next=3  userRanks=[0,3,2,1]</text>
+      <text x="875" y="391">rank 1:  prev=2  next=0  userRanks=[1,0,3,2]</text>
+      <text x="875" y="406">rank 2:  prev=3  next=1  userRanks=[2,1,0,3]</text>
+      <text x="875" y="421">rank 3:  prev=0  next=2  userRanks=[3,2,1,0]</text>
+    </g>
+
+    <text x="865" y="459" font-size="10" fill="#581c87">⚠ 反向不只是 prev/next 互换，userRanks</text>
+    <text x="865" y="474" font-size="10" fill="#581c87">  也要翻转（除起点外），确保 chunk 索引</text>
+    <text x="865" y="489" font-size="10" fill="#581c87">  与邻居语义对齐。</text>
+  </g>
+</svg>
