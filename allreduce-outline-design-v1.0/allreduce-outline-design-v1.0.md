@@ -10,36 +10,86 @@
 
 当前目标是给出一个最小可用、行为完备的 AllReduce 实现：聚焦**单机多卡、采用 Ring 算法 + Simple 协议**这一组成熟搭配，覆盖从 API 入口到 GPU 内核的完整链路。
 
-### 1.2 Ring AllReduce 工作原理（概念）
+### 1.2 Ring AllReduce 工作原理
 
-设 N 个 rank 排成环 `0 → 1 → 2 → ... → N-1 → 0`，每 rank 持有大小为 `count` 的张量。算法分两阶段，共 `2(N-1)` 步：
+> **一句话直觉**：Reduce-Scatter = 边求和边分发（每 rank 最后只持有"全和"的一段）；All-Gather = 把分发出去的"全和段"拼回所有 rank。
 
-| 阶段 | 步数 | 每步动作 |
-|---|---|---|
-| Reduce-Scatter | N-1 | rank `r` 把自己持有的某个 chunk 发给右邻；右邻收到后**累加**到本地对应 chunk |
-| All-Gather | N-1 | rank `r` 把刚拿到的"全和 chunk"转发给右邻；右邻**覆盖**写入 |
+#### 1.2.1 直觉：N=4 的具体例子
 
-**关键性质**：每 rank 总收发量为 `2(N-1)/N × count`，N 大时趋近 2 × count，**与 N 无关**。详细推导见参考文档 §1.4.2。
+设 4 个 rank 排成环 `0 → 1 → 2 → 3 → 0`，每 rank 持有一个被切成 4 块的张量。
+
+- **初始**：rank 0 持有 `[a0, b0, c0, d0]`，rank 1 持有 `[a1, b1, c1, d1]`，依此类推。
+- **目标**：最终所有 rank 都持有 `[A, B, C, D]`，其中 `A = a0+a1+a2+a3`，B/C/D 同理。
+
+> 图 1.2-1：4 rank Ring AllReduce 逐步演化示意——Reduce-Scatter（3 步）+ All-Gather（3 步）
+
+![Ring AllReduce 演化](all_reduce_demo.jpg)
+
+算法分两阶段，共 `2(N-1) = 6` 步：
+
+| 阶段 | 步数 | 每步动作 | 直觉 |
+|---|---|---|---|
+| Reduce-Scatter | N-1 = 3 | 每 rank 把"轮到自己负责的某一段"发给右邻；右邻收到后**累加**到本地对应段 | 数据沿环转一圈被逐步累加，最终每 rank 只持有"全和"中的某一段（rank 0 拿到 A、rank 1 拿到 B……） |
+| All-Gather | N-1 = 3 | 每 rank 把自己手上的"全和段"转发给右邻；右邻**覆盖**写入 | 全和段再沿环转一圈，让每 rank 都拿到完整的 `[A, B, C, D]` |
+
+#### 1.2.2 为什么通信量与 N 无关
+
+**关键性质**：每 rank 总收发量为 `2(N-1)/N × count`，N 大时趋近 `2 × count`，**与 N 无关**。
+
+**直觉**：每 rank 在两个阶段各发 `N-1` 个 chunk，每个 chunk 大小是 `count/N`，所以单向总量约 `(N-1)/N × count ≈ count`，加上同等接收量共 `2 × count`——只跟数据总量有关，跟环上有多少 rank 无关。这就是 Ring 算法适合多卡扩展的根本原因。
+
+### 1.3 核心取舍：装配重 / 热路径轻
+
+本设计把所有"需要决策、需要 syscall、需要进程间交互"的工作集中到 `commInit` 一次性完成；每次 `ncclAllReduce` 调用只剩固定的几步：参数校验 → 查表 → 填描述符 → launch kernel，**无任何运行时决策、无 host 侧通信**。
+
+| 阶段 | 何时发生 | 谁参与 | 耗时量级 | 干什么 |
+|---|---|---|---|---|
+| **装配期** | `commInit` 一次性 | host 多模块 + 跨进程握手 + CUDA 分配 | 毫秒～秒 | 枚举 GPU、可达性探测、Ring 序列构造、后端选择（P2P / SHM）、IPC handle 交换、ringbuf 分配、`devComm` 装配并拷到 GPU |
+| **热路径** | 每次 `ncclAllReduce` | host 查表 + GPU kernel | μs 级 | 参数校验 → 查档位表得 `(nChannels, nThreads)` → 派生 chunkSize → 填工作描述符 → `cudaLaunchKernel` |
+
+GPU kernel 启动后**自主在 device 上推进**，host 与其它 rank 之间只通过 ringbuf 的 head/tail 计数器同步。后续章节凡涉及"为什么这件事在装配期做"或"为什么运行期不做这件事"——都回到这个原则。
 
 ---
 
 ## 2. 术语对照
 
+> 术语按"组织维度"分组：**部署级**（库与外界 / 进程模型）→ **算法级**（数据如何切分流转）→ **传输级**（字节如何在 GPU 之间搬运）→ **运维级**（异常如何处理）。
+
+### 2.1 部署级
+
 | 术语 | 含义 |
 |---|---|
 | **rank** | 一个参与通信的 GPU 进程 / 线程 |
-| **communicator** | 一组 rank 的通信上下文，不可变句柄 |
-| **channel** | 一个 GPU thread block 承载的并行通道；一条单向 Ring 是一个 channel，多 channel 并发执行 |
-| **chunk** | Ring 算法中数据被切分的单位（共 N 份）|
-| **ringbuf** | channel 上的环形缓冲（slot 数 = NCCL_STEPS = 8），用于接收数据 |
+| **communicator**（comm）| 一组 rank 的通信上下文，不可变句柄；所有集合操作都基于一个 comm |
+| **装配** / **装配期** | communicator 一次性初始化阶段：拓扑发现 + Ring 构造 + 建连 + ringbuf 分配；每 comm 仅一次（详见 §1.3） |
+| **热路径** | 单次 `ncclAllReduce` 调用所经过的高频代码路径（参数校验 → 查表 → launch kernel） |
+| **同步握手**（rendezvous） | CPU 侧进程间同步屏障 + 信息交换：所有 rank 必须到齐才能继续；在 `commInit` 时用于交换 `peerInfo` |
+| **UDS**（Unix Domain Socket）| 同一台机器上进程间通信的本地 socket，地址是文件系统路径；本项目用它实现 rank 间同步握手与 IPC handle 交换 |
+| **IPC** | CUDA Inter-Process Communication——跨进程显存映射，让一个进程的 GPU buffer 在另一个进程里也能被 GPU 直接 `load / store` |
+
+### 2.2 算法级
+
+| 术语 | 含义 |
+|---|---|
+| **chunk** | Ring 算法中数据被切分的单位（每 rank 一份，共 N 份）|
+| **channel** | GPU 上一组并行执行单元；本库一个 channel 对应一个 GPU thread block，一条单向 Ring 是一个 channel；多 channel 并发执行以提高带宽利用率 |
+| **Reduce-Scatter / All-Gather** | Ring AllReduce 的两个阶段，参见 §1.2 |
+
+### 2.3 传输级
+
+| 术语 | 含义 |
+|---|---|
+| **PBLink** | 本项目用来代指 GPU 间高带宽直连（类似 NVLink 的位置）；transport 层 P2P 主路径优先走 PBLink，不可用时退回 PCIe Peer，再不可用则降级 SHM |
+| **ringbuf** | channel 上的环形缓冲（slot 数 = NCCL_STEPS = 8），用于在相邻 rank 之间中转数据 |
 | **ringbuf head / tail** | 环形缓冲的读 / 写游标，写者推 tail、读者推 head；无锁推进——运行期 GPU 与 GPU 之间的同步机制 |
-| **Simple 协议** | 数据 + 独立 tail 计数器 + `__threadfence_system` 同步 |
-| **IPC** | CUDA Inter-Process Communication（跨进程显存映射）|
-| **装配** / **装配期** | communicator 一次性初始化阶段：拓扑发现 + Ring 构造 + 建连 + ringbuf 分配；每 comm 仅一次 |
-| **热路径** | 单次 `ncclAllReduce` 调用所经过的高频代码路径（参数校验 → 查表 → launch kernel）|
-| **装配重 / 热路径轻** | 设计原则 P1：可提前计算的工作放到装配阶段；运行期只查表 + launch kernel，避免运行期决策 |
-| **同步握手**（rendezvous） | CPU侧进程间同步屏障 + 信息交换：所有 rank 必须到齐才能继续；在 `commInit` 时用于交换 `peerInfo`，本项目用 UDS（Unix Domain Socket）实现 |
+| **Simple 协议** | 本库使用的传输协议：数据 + 独立的 tail 计数器 + `__threadfence_system` 内存屏障实现写者 / 读者同步 |
+
+### 2.4 运维级
+
+| 术语 | 含义 |
+|---|---|
 | **abortFlag / fatalError** | 异常退出两阶段：检测到异常 → 设 `fatalError`；用户调 `commAbort` → 置 `abortFlag` → kernel spin 看到后 return |
+| **装配重 / 热路径轻** | 贯穿全文的设计原则：可提前计算的工作放到装配阶段；运行期只查表 + launch kernel，避免运行期决策。详见 §1.3 |
 
 ---
 
@@ -128,11 +178,7 @@ flowchart TB
 
 ### 5.3 关键设计原则
 
-装配重 / 热路径轻：
-
-把所有"需要决策、需要 syscall、需要进程间交互"的工作集中到 `commInit` 一次性完成——包括：枚举 GPU、可达性探测、Ring 序列构造、后端选择（P2P / SHM）、IPC handle 交换、ringbuf 分配、`devComm` 结构装配并拷到 GPU。这些结果在 init 末统一写入 `comm` 结构，运行期不再变动。
-
-每次 `ncclAllReduce` 调用的热路径只剩固定的几步：参数校验 → 按消息大小查档位表得到 `(nChannels, nThreads)` 并派生 chunkSize → 填工作描述符 → `cudaLaunchKernel`，没有任何运行时决策、没有任何 host 侧通信。GPU kernel 启动后自主在 device 上推进，host 与其它 rank 之间只通过 ringbuf 的 head/tail 计数器同步。
+见 §1.3「核心取舍：装配重 / 热路径轻」——这是贯穿全文的根本权衡：所有需要决策、syscall、进程间交互的工作集中在 `commInit` 一次性完成；运行期热路径只剩查表 + launch kernel，无运行时决策、无 host 侧通信。后续 §6 各模块的"装配期做什么 / 运行期做什么"分界，均出自这一原则。
 
 ---
 
@@ -337,13 +383,23 @@ stateDiagram-v2
 
 > **代价数值仅是相对量级，用于在多条候选环中做比较；不直接对应任何时延 / 带宽指标。**
 
-**`commInit` 中按以下步骤执行**：
+**整体流程概览**：
 
-> 图 6.2.3-1：graph 模块关键数据结构——① XML 拓扑文件（输入） ② cost 矩阵（中间产物） ③ ncclRing（输出）
+> 图 6.2.3-1：graph 模块在 `commInit` 中的整体执行流程——XML 读取（不存在则现场扫描）→ GPU 与拓扑节点对齐 → 填代价矩阵 → DFS / 贪心搜环 → 环合法性校验 → 写入 `comm->channels[*].ring`
+>
+> 完整 SVG 见 [`allreduce-graph-flow.svg`](allreduce-graph-flow.svg)。
+
+![graph 模块整体流程](allreduce-graph-flow.svg)
+
+**关键数据结构**：
+
+> 图 6.2.3-2：graph 模块关键数据结构——① XML 拓扑文件（输入） ② cost 矩阵（中间产物） ③ ncclRing（输出）
 >
 > 完整 SVG 见 [`allreduce-graph-datastructures.svg`](allreduce-graph-datastructures.svg)。
 
 ![graph 模块关键数据结构](allreduce-graph-datastructures.svg)
+
+**`commInit` 中按以下步骤执行**：
 
 1. **获取 XML 拓扑文件**：先尝试从约定路径（或 `NCCL_TOPO_FILE` 环境变量指定路径）读取已有 XML 文件：
    - **文件存在**：按 `<cpu>` → `<pci>` → `<gpu>` 层级解析为内存中的拓扑树（快路径，无需调用 NVML / sysfs）。
@@ -509,66 +565,80 @@ stateDiagram-v2
 
 3. 推进 `gridOffset += loopSize`，回到步骤 2，直到处理完所有元素。
 
-**kernel 概念性伪代码**：
+**kernel 概念性步骤**（语言无关伪代码；每个 block 在一个 channel 上独立执行，省略偏移与 nelem 的细节计算）：
 
-```c
-__global__ void ncclKernel_AllReduce_Ring_Simple_Sum_f32(ncclWorkElem* args) {
-  int bid       = blockIdx.x;                  // channel id
-  int nChannels = args->nChannels;
-  int rank      = ncclShmem.comm.rank;
-  int N         = ncclShmem.comm.nRanks;
-  int ringIx    = rank;                        // 单 Ring 简化:ringIx == rank
-  size_t size   = args->count;                 // 总元素数
-  size_t chunkSize = args->chunkSize;          // 装配期查表确定
-  size_t loopSize  = (size_t)nChannels * N * chunkSize;
+```
+输入: rank, N (= nRanks), size, chunkSize, nChannels
+派生: loopSize = nChannels × N × chunkSize
 
-  prims_simple<Sum, float> prims(
-    /*prev=*/(rank + N - 1) % N,
-    /*next=*/(rank + 1) % N,
-    args->sendbuff, args->recvbuff);
+# 外层: 大张量分片处理
+for gridOffset in 0, loopSize, 2*loopSize, ... while gridOffset < size:
 
-  // 外层:大数据量分片处理,每轮处理 nChannels × N × chunkSize 元素
-  for (size_t gridOffset = 0; gridOffset < size; gridOffset += loopSize) {
-    auto offsetOf = [&](int chunk) -> size_t {
-      return gridOffset + (size_t)bid * N * chunkSize + chunk * chunkSize;
-    };
-    auto nelemOf = [&](int chunk) -> int {
-      return min(chunkSize, size - offsetOf(chunk));
-    };
+    # === Reduce-Scatter: N-1 步 ===
+    chunk = (rank - 1) mod N
+    send(chunk)                          # step 0:    只发送本 rank 初始 chunk,不接收
 
-    // === Reduce-Scatter: N-1 步 ===
-    // step 0: 只发送
-    int chunk = (ringIx + N - 1) % N;
-    prims.send(offsetOf(chunk), nelemOf(chunk));
+    for j in 2 .. N-1:                   # step 1 ~ N-2
+        chunk = (rank - j) mod N
+        recvReduceSend(chunk)            #            收 + 累加 + 转发;数据停留在 ringbuf,不写 output
 
-    // step 1 ~ N-2: 累加并转发,数据停留在 ringbuf,不写 output
-    for (int j = 2; j < N; ++j) {
-      chunk = (ringIx + N - j) % N;
-      prims.recvReduceSend(offsetOf(chunk), nelemOf(chunk));
-    }
+    # === 转折步: Reduce-Scatter 末步 + All-Gather 首步合并 ===
+    chunk = rank                         # step N-1:  收 + 最后一次累加 → 此 chunk 已是全和 → 写 output + 同时转发
+    recvReduceCopySend(chunk)
 
-    // === 转折步: Reduce-Scatter 末步 + All-Gather 首步合并 ===
-    // 接收最后一次 reduce → 此 chunk 已是全和 → 写入 output → 同时转发
-    chunk = ringIx;
-    prims.recvReduceCopySend(offsetOf(chunk), nelemOf(chunk));
+    # === All-Gather: N-1 步 ===
+    for j in 1 .. N-2:                   # step N ~ 2N-3
+        chunk = (rank - j) mod N
+        recvCopySend(chunk)              #            收 + 写 output + 转发
 
-    // === All-Gather: N-1 步 ===
-    // step N ~ 2N-3: 转发已 reduce 完的 chunk,并写入 output
-    for (int j = 1; j < N - 1; ++j) {
-      chunk = (ringIx + N - j) % N;
-      prims.recvCopySend(offsetOf(chunk), nelemOf(chunk));
-    }
-
-    // step 2N-2: 最后一步只接收+写 output,不再转发
-    chunk = (ringIx + 1) % N;
-    prims.recv(offsetOf(chunk), nelemOf(chunk));
-  }
-}
+    chunk = (rank + 1) mod N             # step 2N-2: 只收 + 写 output,不再转发
+    recv(chunk)
 ```
 
-**Simple 协议原语内部实现**（`prims_simple`，每次原语调用展开为）：
-- 写入侧：写数据到 `buffs[step % NCCL_STEPS]` → `__threadfence_system()` 保序 → 写 `tail` 计数器通知对端。
-- 读出侧：在 `tail > step` 上 spin → 读 data → 写 `head` 计数器释放 slot。
+> 完整 C++ 实现（含 `prims_simple` 模板展开、`ncclShmem` 共享内存布局、warp 级搬运优化、偏移与 nelem 的精确计算等）见详设。
+
+**Simple 协议原语内部实现**：每次原语调用都展开为写者 / 读者通过 ringbuf 的 tail / head 计数器配对推进——写者推 tail 通知"数据已就绪"，读者推 head 释放 slot 供写者复用。
+
+> 图 6.2.6-2：Simple 协议时序——写者写数据 → 内存屏障 → 推 tail；读者 spin 等 tail > step → 读数据 → 推 head 释放 slot；任何 spin 点都检查 abortFlag 以支持 hang 逃生
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant W as 写者 GPU<br/>(本 rank)
+    participant Buf as ringbuf 数据区<br/>(对端 HBM)
+    participant Tail as tail 计数器<br/>(对端 HBM)
+    participant Head as head 计数器<br/>(本端 HBM)
+    participant R as 读者 GPU<br/>(对端 rank)
+
+    Note over W,R: 初始: tail = head = step = 0<br/>共 NCCL_STEPS = 8 个 slot 循环复用
+
+    rect rgb(230, 245, 255)
+    Note over W,Tail: 写者侧
+    W->>Buf: 写 chunk 到 buffs[step mod 8]
+    Note over W: __threadfence_system()<br/>保证数据先于 tail 对外可见
+    W->>Tail: tail = step + 1
+    end
+
+    rect rgb(255, 247, 230)
+    Note over R,Head: 读者侧
+    loop spin 等待
+        R->>Tail: 轮询读 tail
+    end
+    Tail-->>R: tail > step ✓
+    R->>Buf: 读 chunk 做 reduce / copy
+    R->>Head: head = step + 1 (释放 slot)
+    end
+
+    Note over W: 下一轮要复用同一 slot 前<br/>spin 等 head 跟上,避免覆盖未读数据
+
+    rect rgb(255, 235, 235)
+    Note over W,R: 任何 spin 点都检查 *abortFlag,置位则立即 return — hang 逃生
+    end
+```
+
+要点（与图对应）：
+- **写入侧**：写数据到 `buffs[step % NCCL_STEPS]` → `__threadfence_system()` 保序 → 推 `tail` 通知对端。
+- **读出侧**：在 `tail > step` 上 spin → 读 data → 推 `head` 释放 slot。
 - **abortFlag 检查点**：每次 spin 迭代检查 `*abortFlag`，置位则立即 return，跳过剩余 chunk / 剩余 step——这是 hang 逃生的关键挂钩点（参见 §7.3）。
 
 > 备注：本期只走"间接路径"——数据始终经本端 ringbuf 中转。不实现 Direct 路径（不通过 `ptrExchange` 拿到 peer output buffer 指针后直写），换得 transport 接口最小化。
