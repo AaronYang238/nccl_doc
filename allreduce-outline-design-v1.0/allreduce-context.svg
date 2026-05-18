@@ -74,7 +74,6 @@
     <text x="240" y="410" text-anchor="middle" font-size="13" font-weight="bold" fill="#14532d">CUDA Runtime + Driver</text>
     <text x="240" y="436" text-anchor="middle" font-size="10" fill="#14532d">cudaLaunchKernel · cudaMalloc</text>
     <text x="240" y="454" text-anchor="middle" font-size="10" fill="#14532d">cudaIpc* · cudaStream*</text>
-    <text x="240" y="482" text-anchor="middle" font-size="9" font-style="italic" fill="#14532d">CUDA Toolkit ≥ 11.0</text>
   </g>
 
   <!-- ===== 3b. GPU 硬件互联 (condensed) ===== -->

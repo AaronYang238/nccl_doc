@@ -29,7 +29,7 @@
 |---|---|
 | **rank** | 一个参与通信的 GPU 进程 / 线程 |
 | **communicator** | 一组 rank 的通信上下文，不可变句柄 |
-| **channel** | 一个 GPU thread block 承载的并行通道；一条单向 Ring 一份 channel，多 channel 并发执行 |
+| **channel** | 一个 GPU thread block 承载的并行通道；一条单向 Ring 是一个 channel，多 channel 并发执行 |
 | **chunk** | Ring 算法中数据被切分的单位（共 N 份）|
 | **ringbuf** | channel 上的环形缓冲（slot 数 = NCCL_STEPS = 8），用于接收数据 |
 | **ringbuf head / tail** | 环形缓冲的读 / 写游标，写者推 tail、读者推 head；无锁推进——运行期 GPU 与 GPU 之间的同步机制 |
@@ -38,7 +38,7 @@
 | **装配** / **装配期** | communicator 一次性初始化阶段：拓扑发现 + Ring 构造 + 建连 + ringbuf 分配；每 comm 仅一次 |
 | **热路径** | 单次 `ncclAllReduce` 调用所经过的高频代码路径（参数校验 → 查表 → launch kernel）|
 | **装配重 / 热路径轻** | 设计原则 P1：可提前计算的工作放到装配阶段；运行期只查表 + launch kernel，避免运行期决策 |
-| **同步握手**（rendezvous） | 进程间同步屏障 + 信息交换：所有 rank 必须到齐才能继续；在 `commInit` 时用于交换 `peerInfo`，本项目用 UDS（Unix Domain Socket）实现 |
+| **同步握手**（rendezvous） | CPU侧进程间同步屏障 + 信息交换：所有 rank 必须到齐才能继续；在 `commInit` 时用于交换 `peerInfo`，本项目用 UDS（Unix Domain Socket）实现 |
 | **abortFlag / fatalError** | 异常退出两阶段：检测到异常 → 设 `fatalError`；用户调 `commAbort` → 置 `abortFlag` → kernel spin 看到后 return |
 
 ---
