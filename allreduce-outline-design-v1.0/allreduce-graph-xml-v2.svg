@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 420 450" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', 'Helvetica Neue', Arial, sans-serif">
+  <rect width="420" height="450" fill="#fafafa"/>
+  <g transform="translate(-20, -60)">
+    <rect x="30" y="70" width="400" height="430" fill="#ecfdf5" stroke="#10b981" stroke-width="2" rx="6"/>
+    <text x="230" y="96" text-anchor="middle" font-size="13" font-weight="bold" fill="#065f46">XML 拓扑文件结构（graph 模块输入）</text>
+    <text x="230" y="113" text-anchor="middle" font-size="9" font-style="italic" fill="#065f46">首次启动由 graph 现场扫描 NVML / sysfs 生成；落盘后下次直接读取</text>
+
+    <rect x="45" y="125" width="370" height="295" fill="#ffffff" stroke="#a7f3d0" stroke-width="1" rx="3"/>
+
+    <g font-family="'Consolas','SF Mono','Menlo',monospace" font-size="9" fill="#065f46" xml:space="preserve">
+      <text x="55" y="140">&lt;system version="1"&gt;</text>
+      <text x="55" y="153">&#160;&#160;&lt;cpu numaid="0" arch="x86_64"&gt;</text>
+      <text x="55" y="166">&#160;&#160;&#160;&#160;&lt;pci busid="0000:18:00.0" class="0x060400"&gt;&#160;&#160;&#160;&lt;!-- switch --&gt;</text>
+      <text x="55" y="179">&#160;&#160;&#160;&#160;&#160;&#160;&lt;pci busid="0000:1a:00.0" class="0x030200"&gt;&#160;&lt;!-- GPU 0 --&gt;</text>
+      <text x="55" y="192">&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&lt;gpu dev="0" sm="80" rank="0" gdr="1"&gt;</text>
+      <text x="55" y="205">&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&lt;pblink target="0000:1c:00.0" count="2"/&gt;</text>
+      <text x="55" y="218">&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&lt;pblink target="0000:1e:00.0" count="2"/&gt;</text>
+      <text x="55" y="231" fill="#0f766e">&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;...&#160;&#160;&lt;!-- 与其它 6 卡逐一相连 --&gt;</text>
+      <text x="55" y="244">&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&lt;/gpu&gt;</text>
+      <text x="55" y="257">&#160;&#160;&#160;&#160;&#160;&#160;&lt;/pci&gt;</text>
+      <text x="55" y="270">&#160;&#160;&#160;&#160;&#160;&#160;&lt;pci busid="0000:1c:00.0" class="0x030200"&gt;&#160;&lt;!-- GPU 1 --&gt;</text>
+      <text x="55" y="283">&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&lt;gpu dev="1" sm="80" rank="1" gdr="1"&gt; ... &lt;/gpu&gt;</text>
+      <text x="55" y="296">&#160;&#160;&#160;&#160;&#160;&#160;&lt;/pci&gt;</text>
+      <text x="55" y="309" fill="#0f766e">&#160;&#160;&#160;&#160;&#160;&#160;...&#160;&#160;&lt;!-- GPU 2, 3 同构 --&gt;</text>
+      <text x="55" y="322">&#160;&#160;&#160;&#160;&lt;/pci&gt;</text>
+      <text x="55" y="335">&#160;&#160;&lt;/cpu&gt;</text>
+      <text x="55" y="348">&#160;&#160;&lt;cpu numaid="1" arch="x86_64"&gt;</text>
+      <text x="55" y="361" fill="#0f766e">&#160;&#160;&#160;&#160;...&#160;&#160;&lt;!-- 对称结构,挂 GPU 4-7 --&gt;</text>
+      <text x="55" y="374">&#160;&#160;&lt;/cpu&gt;</text>
+      <text x="55" y="387">&lt;/system&gt;</text>
+    </g>
+
+    <text x="45" y="440" font-size="10" font-weight="bold" fill="#065f46">关键字段（参考 nccl-topo-template.xml）：</text>
+    <text x="45" y="457" font-size="9" fill="#065f46">• 层级嵌套：&lt;cpu&gt;(numaid) → &lt;pci&gt;(switch) → &lt;pci&gt;(GPU endpoint) → &lt;gpu&gt;</text>
+    <text x="45" y="473" font-size="9" fill="#065f46">• &lt;pblink target="..." count="..."/&gt;：嵌入 &lt;gpu&gt; 内的 mesh 边</text>
+    <text x="45" y="489" font-size="9" fill="#065f46">• graph 解析后得到拓扑树 + 每张 GPU 的邻接边集合</text>
+  </g>
+</svg>

@@ -147,7 +147,7 @@
 
     <rect x="520" y="640" width="340" height="80" fill="#c4b5fd" rx="4"/>
     <text x="690" y="667" text-anchor="middle" font-size="13" font-weight="bold" fill="#4c1d95">search</text>
-    <text x="690" y="687" text-anchor="middle" font-size="10" fill="#4c1d95">代价矩阵 + DFS / 贪心搜 Hamilton 环</text>
+    <text x="690" y="687" text-anchor="middle" font-size="10" fill="#4c1d95">代价矩阵 + 贪心 + 2-opt 搜 Hamilton 环</text>
     <text x="690" y="703" text-anchor="middle" font-size="9" fill="#4c1d95">输出: prev / next 双向序列</text>
 
     <rect x="880" y="640" width="320" height="80" fill="#c4b5fd" rx="4"/>

@@ -142,7 +142,7 @@ GPU kernel 启动后**自主在 device 上推进**，host 与其它 rank 之间�
 >
 > 完整 SVG 见 [`allreduce-context.svg`](allreduce-context.svg)。
 
-![AllReduce 库外部接口与运行环境](allreduce-context.svg)
+<img src="allreduce-context.svg" alt="AllReduce 库外部接口与运行环境" width="900">
 
 ### 4.1 调用方
 
@@ -222,8 +222,8 @@ flowchart LR
 | **public-api** | 对外暴露 C ABI 公开符号，承接调用方的所有交互。本模块**只做轻量参数合法性检查**（指针非空、数值范围、`comm->state` 合法），不做任何语义解析（不展开 dtype/op 的具体含义、不做 GPU 选择、不做内存分配），随后**把请求转交内部对应模块**（`commInit` → comm；`ncclAllReduce` → enqueue；查询类直接读 comm 字段）。它是稳定 ABI 的物理边界，C++ 内部签名调整不会外溢。 |
 | **bootstrap** | 装配链路的第一站。通过 UDS socket 把所有 N 个 rank 拉到同一会合点，做**同步屏障**（确保 N 个 rank 都到齐）；并让每个 rank 各自起一个常驻的 UDS 监听 socket，把自己的 listen 路径塞进 `peerInfo` 上报。完成后所有 rank 都拿到一份完整的 `peerInfo[]`（**含所有 rank 的 `udsListenPath`**），transport 后续按此直接 rank i ↔ rank j P2P 交换 IPC handle / SHM 路径，无需经 rank 0 中转。单进程多线程场景跳过，直接走全局变量。 |
 | **comm**（init / commLifecycle）| `commInit / commDestroy / commAbort / commGetAsyncError` 四个 API 的总编排器。commInit对内按顺序调度 bootstrap → graph → transport → devComm 装配，维护 `comm->state` 字段表示当前阶段。本模块本身不做拓扑分析、不做建连、不做 GPU 数据搬运，只负责**调度顺序、状态推进、错误传播和异常逃生**（`abortFlag` / `fatalError`）。 |
-| **graph** | 装配期完成"**获取硬件拓扑 + 构造 Ring 序列**"两件事。XML 拓扑文件存在则直接解析，不存在则现场调 NVML / sysfs / `/proc/cpuinfo` 扫描并落盘复用；得到的拓扑树用于填充代价矩阵（PBLink direct / 同 switch / 同 CPU / 跨 NUMA / 不可达），再用 DFS + 剪枝搜出总代价最低的 Hamilton 环，输出 prev/next 两份序列（前向 + 反向，对应 `nChannels = 2`）。结果写入 `comm->channels[*].ring` 后固化，运行期不再活跃。 |
-| **transport** | 装配期**建立每个channel中两节点间数据通路**。具体做法：对每对节点调 `cudaDeviceCanAccessPeer` 决定走 P2P (CUDA IPC + PBLink / PCIe) 主路径还是 SHM (`/dev/shm` mmap) 备用路径；分配本端 ringbuf、导出 IPC handle / SHM 路径、按 `peerInfo[peer].udsListenPath` 直连对端做 P2P 二次握手交换 handle、映射对端 buffer 到本端虚拟地址空间。装配完成后，运行期 device kernel 直接通过虚拟地址 `store / load` 远端 ringbuf，transport 层不再参与。 |
+| **graph** | 装配期完成"**获取硬件拓扑 + 构造 Ring 序列 + 给每条边贴 transport 后端标签**"三件事。XML 拓扑文件存在则直接解析，不存在则现场调 NVML / sysfs / `/proc/cpuinfo` 扫描并落盘复用；得到的拓扑树用于填充代价矩阵（PBLink direct / 同 switch / 同 CPU / 跨 NUMA / 不可达），再用贪心 + 2-opt 搜出总代价最低的 Hamilton 环，输出 prev/next 两份序列（前向 + 反向，对应 `nChannels = 2`）；同时按 cost 给每条边贴 P2P / SHM 后端标签。结果写入 `comm->channels[*].ring` 与 `comm->channels[*].peers[*].transport` 后固化，运行期不再活跃。 |
+| **transport** | 装配期**建立每个 channel 中两节点间数据通路**。具体做法：**读 graph 模块写好的 `peers[p].transport` 标签**决定走 P2P (CUDA IPC + PBLink / PCIe) 主路径还是 SHM (`/dev/shm` mmap) 备用路径（**不重复调 `cudaDeviceCanAccessPeer`**）；分配本端 ringbuf、导出 IPC handle / SHM 路径、按 `peerInfo[peer].udsListenPath` 直连对端做 P2P 二次握手交换 handle、映射对端 buffer 到本端虚拟地址空间。装配完成后，运行期 device kernel 直接通过虚拟地址 `store / load` 远端 ringbuf，transport 层不再参与。 |
 | **enqueue** | 运行期 host 侧的实现入口，是**热路径中唯一的 host 模块**。每次用户调 `ncclAllReduce` 都进入这里，按四步执行：参数校验 → 查档位表得到 `(nChannels, nThreads)` → 填 `ncclWorkElem` 工作描述符 → 调 `cudaLaunchKernel` 把 kernel 推到用户传入的 stream 上。约束严格：不做任何运行时决策、不做 host 侧通信、不做内存分配；返回 `ncclSuccess` 仅表示入队成功。 |
 | **device**（GPU 内核）| 整个库**唯一在 GPU 上运行的模块**。模板维度 `<Ring, Simple, Op, Dtype>`——算法 / 协议固定为 `(Ring, Simple)`；按支持的 `(op, dtype)` 组合产出 kernel 符号矩阵 `ncclKernel_AllReduce_Ring_Simple_{Op}_{Dtype}`。kernel 由 enqueue launch 后从 `ncclDevComm` 读 ring 邻居 / ringbuf 指针 / abortFlag，按 Ring 算法的 `2N-1` 步原语（`send / recvReduceSend / recvReduceCopySend / recvCopySend / recv`）流水推进，自主完成 Reduce-Scatter + All-Gather 两阶段；通过 ringbuf 的 head/tail 与邻居无锁同步，每个 spin 点检查 abortFlag 以支持 hang 逃生。 |
 
@@ -412,28 +412,24 @@ stateDiagram-v2
 
 **整体流程概览**：
 
-> 图 6.2.3-1：graph 模块在 `commInit` 中的整体执行流程——XML 读取（不存在则现场扫描）→ GPU 与拓扑节点对齐 → 填代价矩阵 → DFS / 贪心搜环 → 环合法性校验 → 写入 `comm->channels[*].ring`
+> 图 6.2.3-1：graph 模块在 `commInit` 中的整体执行流程——XML 读取（不存在则现场扫描）→ GPU 与拓扑节点对齐 → 填代价矩阵 → 贪心 + 2-opt 搜环 → 环合法性校验 → 写入 `comm->channels[*].ring`
 >
 > 完整 SVG 见 [`allreduce-graph-flow-v2.svg`](allreduce-graph-flow-v2.svg)。
 
 ![graph 模块整体流程](allreduce-graph-flow-v2.svg)
 
-**关键数据结构**：
-
-> 图 6.2.3-2：graph 模块关键数据结构——① XML 拓扑文件（输入） ② cost 矩阵（中间产物） ③ ncclRing（输出）
->
-> 完整 SVG 见 [`allreduce-graph-datastructures.svg`](allreduce-graph-datastructures.svg)。
-
-![graph 模块关键数据结构](allreduce-graph-datastructures.svg)
-
 **`commInit` 中按以下步骤执行**：
 
 1. **获取 XML 拓扑文件**：先尝试从约定路径（或 `NCCL_TOPO_FILE` 环境变量指定路径）读取已有 XML 文件：
-   - **文件存在**：按 `<cpu>` → `<pci>` → `<gpu>` 层级解析为内存中的拓扑树（快路径，无需调用 NVML / sysfs）。
+   - **文件存在**：按 `<cpu>` → `<pci>` → `<gpu>` 层级解析为内存中的拓扑树。
    - **文件不存在**：现场调用 NVML / sysfs / `/proc/cpuinfo` 等接口扫描节点拓扑，构建拓扑树，并把结果序列化写到同一路径下保存——下次 `commInit` 启动时即走"文件存在"的快路径。这是一次性的兜底，保证首次部署或机器换硬件后仍能自举。
    - **文件存在但格式非法**：装配失败（不自动覆盖，避免误删可能是人工调整过的 XML）；扫描失败 → 装配失败。
 
-2. **GPU 枚举与对齐**：调 `cudaGetDeviceCount` 取本节点 GPU 数；本 rank 自己的 device 在 init 入口已绑定（`cudaSetDevice`），其它 rank 的 busId 与 NUMA 归属通过 `peerInfo` 取得；然后把每个 rank 与 XML 中的 GPU 节点按 busId 字符串逐一对齐，建立 `rank → 拓扑节点` 映射表。任一 rank 在 XML 中找不到、或本地 device 不在 XML 中 → 装配失败（说明 XML 与运行环境不匹配）。
+   > 图 6.2.3-2：XML 拓扑文件结构（graph 模块输入）。完整 SVG 见 [`allreduce-graph-xml-v2.svg`](allreduce-graph-xml-v2.svg)。
+
+   <img src="allreduce-graph-xml-v2.svg" alt="XML 拓扑文件结构" width="450">
+
+2. **GPU 枚举与对齐**：把每个 rank 与 XML 中的 GPU 节点按 busId 字符串逐一对齐，建立 `rank → 拓扑节点` 映射表。任一 rank 在 XML 中找不到、或本地 device 不在 XML 中 → 装配失败（说明 XML 与运行环境不匹配）。
 
 3. **填代价矩阵 `cost[N][N]`**：对每对 (i, j)：
    - 在拓扑树上沿 GPU i → PCIe switch → host bridge → CPU socket 向上回溯，再向下走到 GPU j，沿途记录是否经过同 PCIe switch / 同 host bridge / 跨 CPU socket，得到"拓扑距离类别"。
@@ -441,24 +437,30 @@ stateDiagram-v2
    - 按上表"链路分类与代价模型"填入对应代价；XML 中没有任何连接、或 `cudaDeviceCanAccessPeer(i, j) == false` → `cost[i][j] = ∞`。
    - 对角线 `cost[i][i] = 0`（自连接不参与搜索）。
 
-4. **Ring 搜索（DFS + 剪枝 + 链路带宽消耗）**：在代价矩阵上找一条总代价最小的 Hamilton 环。
-   - **基本框架（DFS + 剪枝）**：N ≤ 16，从 rank 0 出发递归选下一个未访问节点；维护当前路径累计代价 `acc`，若 `acc + 剩余下界估计 ≥ 已知最优解` 则回溯。剩余下界用"剩余未访问节点各自最小出边和"估算。固定起点 rank 0 打破环的 N 重旋转对称；只搜环的一个方向打破镜像对称。
-   - **链路带宽消耗（核心设计）**：每条物理链路（PBLink wire / PCIe switch port）维护一个 `remaining[i][j]` 剩余带宽（初始 100%），cost 表中的 `cost[i][j]` 与 `remaining[i][j]` 反比关联——剩余越少 cost 越高。每个 channel / block 选边时声明自己消耗多少带宽（例如一个 channel 只占 PBLink 20%，或保守按 50% 计），选边后按"已用比例"提升该边 cost：物理链路并未"被独占"，可以继续被后续选择复用，但每次复用 cost 都会再次抬升；剩余带宽消耗到 0 时 cost 升至 `∞`，DFS 自动跳过。这样既适配"单 channel 打不满整条链路"的常见情况，又在多 channel / 多 ring 共享物理链路时让搜索自动倾向于带宽未被占满的边，避免局部超额分配。回溯时同步恢复 `remaining` 与 `cost`，保证 branch-and-bound 完备性。
-   - **示例（N = 4，环 0→1→2→3→0，每 channel 占 50% 带宽）**：DFS 依次选 (r0→r1, base=1) → cost 升为 2；(r1→r2, base=5) → cost 升为 10；(r2→r3, base=1) → cost 升为 2；(r3→r0, base=50) → cost 升为 100；累计 `acc = 1 + 5 + 1 + 50 = 57`（acc 使用选边时的当前 cost，而非更新后的）。后续若 ch1 反向 Ring 在同一矩阵继续搜索，已被消耗 50% 的 PBLink 边代价已经翻倍，搜索倾向于选剩余 100% 的其它边；若两 channel 都选同一条 PBLink → 该边剩余 = 0 → 后续任何 channel 都无法再用。
-   - **简化兜底（贪心 + 2-opt）**：DFS 超时退回贪心——从 rank 0 出发每步选剩余 GPU 中当前 `cost` 最小的邻居，同样按比例消耗带宽；环形闭合后做一次 2-opt：对每两条非相邻边 `(a-b, c-d)` 尝试换成 `(a-c, b-d)`，若总代价下降则接受（交换时需恢复换出边的带宽、消耗换入边的带宽），迭代直到无改进。
-   - **退化情况**：所有可达分支累积消耗后剩余带宽不足以闭合环（cost 全部到 ∞）→ 回溯耗尽 → 装配失败。
+   > 图 6.2.3-3：cost[N][N] 代价矩阵示例（N=4），含贪心 + 2-opt 搜索 + 链路带宽消耗演示。完整 SVG 见 [`allreduce-graph-cost-matrix-v2.svg`](allreduce-graph-cost-matrix-v2.svg)。
 
-    > **备注：1. 当前nchannel手动配置。NCCL采用其他算法确定最合适的channel数； 2. 未考虑复杂PCIe switch场景：例如GPU 0与GPU 1、GPU 0与GPU 2占用了相同的某段PCIe链路**
+   <img src="allreduce-graph-cost-matrix-v2.svg" alt="cost 代价矩阵" width="450">
 
-5. **环合法性校验**：扫描搜出的环上 N 条边——
-   - `cost = 1 / 5 / 10 / 50`：边可用，运行期由 transport 走 P2P（前两类通常落到 NVLink / PBLink，后两类落到 PCIe Peer）。
-   - `cost = ∞`：边在 P2P 层不可达，graph 标记为"需降级"，交给 transport 走 SHM。
-   - 若标记为"需降级"的边超过阈值（如几乎所有边都要 SHM），认为 P2P 几乎完全失效，可能是硬件配置异常 → 装配失败。
+4. **Ring 搜索（贪心 + 2-opt + 链路带宽消耗）**：在代价矩阵上找一条总代价最小的 Hamilton 环。
+   - **基本框架（贪心 + 2-opt）**：从 rank 0 出发，每步选剩余 GPU 中当前 `cost` 最小的邻居（同代价时按 rank id 取较小者保证确定性）；环形闭合后做一次 2-opt 局部优化——对每两条非相邻边 `(a-b, c-d)` 尝试换成 `(a-c, b-d)`，若总代价下降则接受（交换时同步恢复换出边的带宽、消耗换入边的带宽），迭代直到无改进。固定起点 rank 0 打破环的 N 重旋转对称；只搜环的一个方向打破镜像对称。
+   - **链路带宽消耗（核心设计）**：每条物理链路（PBLink wire / PCIe switch port）维护一个 `remaining[i][j]` 剩余带宽（初始 100%），cost 表中的 `cost[i][j]` 与 `remaining[i][j]` 反比关联——剩余越少 cost 越高。每个 channel / block 选边时声明自己消耗多少带宽（例如一个 channel 只占 PBLink 20%，或保守按 50% 计），选边后按"已用比例"提升该边 cost：物理链路并未"被独占"，可以继续被后续选择复用，但每次复用 cost 都会再次抬升；剩余带宽消耗到 0 时 cost 升至 `∞`，贪心自动跳过。这样既适配"单 channel 打不满整条链路"的常见情况，又在多 channel / 多 ring 共享物理链路时让搜索自动倾向于带宽未被占满的边，避免局部超额分配。
+   - **示例（N = 4，环 0→1→2→3→0，每 channel 占 50% 带宽）**：贪心依次选 (r0→r1, base=1) → cost 升为 2；(r1→r2, base=5) → cost 升为 10；(r2→r3, base=1) → cost 升为 2；闭环 (r3→r0, base=50) → cost 升为 100；累计 `acc = 1 + 5 + 1 + 50 = 57`（acc 使用选边时的当前 cost，而非更新后的）。后续若 ch1 反向 Ring 在同一矩阵继续搜索，已被消耗 50% 的 PBLink 边代价已经翻倍，搜索倾向于选剩余 100% 的其它边；若两 channel 都选同一条 PBLink → 该边剩余 = 0 → 后续任何 channel 都无法再用。
+   - **退化情况**：贪心走到某节点时所有剩余可达边都到 `∞`（剩余带宽耗尽，无法闭合环）→ 装配失败。
+
+    > **备注：1. 当前Ring搜索检出的nchannel由手动配置指定，NCCL采用其他算法确定最合适的channel数； 2. 未考虑复杂PCIe switch场景：例如GPU 0与GPU 1、GPU 0与GPU 2占用了相同的某段PCIe链路**
+
+5. **确定边上使用的 transport 后端**：扫描搜出的环上 N 条边，按 cost 给每条边贴 transport 后端标签，并把结果**写入 `comm->channels[c].peers[p].transport`**，供后续 §6.2.4 transport 模块直接读取（不再重复调 `cudaDeviceCanAccessPeer`——可达性信息在 step 3 填代价矩阵时已固化进 cost）：
+   - `cost = 1 / 5 / 10 / 50`：边可用，标记为 **P2P** 后端（前两类通常落到 NVLink / PBLink，后两类落到 PCIe Peer）。
+   - `cost = ∞`：边在 P2P 层不可达，标记为 **SHM** 后端（运行期降级，走 `/dev/shm` mmap）。
 
 6. **双向 Ring 输出**：本期固定 `nChannels = 2`（与 transport / device 约定）：
    - `channels[0].ring = { prev = ring_prev[r], next = ring_next[r], userRanks = [r0, r1, ..., rN-1] }`（前向）
    - `channels[1].ring = { prev = ring_next[r], next = ring_prev[r], userRanks = [r0, rN-1, ..., r1] }`（反向：把前向的 prev / next 互换，并把 userRanks 数组翻转——确保两份 Ring 的"邻居语义"与"chunk 顺序"都对齐）
    - 两个 channel 走相反方向，分别从 PBLink 的两个物理方向独立推进数据，让 transport 层映射出来的两套 ringbuf 同时跑满。
+
+   > 图 6.2.3-4：ncclRing 结构与双向输出示例（N=4，nChannels=2）。完整 SVG 见 [`allreduce-graph-ring-v2.svg`](allreduce-graph-ring-v2.svg)。
+
+   <img src="allreduce-graph-ring-v2.svg" alt="ncclRing 结构" width="450">
 
 7. **结果落地**：把两份 ring 序列写入 `comm->channels[0..1].ring.{prev, next, userRanks}`；graph 模块工作完成，运行期不再调用任何 graph 代码。
 
@@ -472,16 +474,13 @@ stateDiagram-v2
 
 | 项 | 内容 |
 |---|---|
-| 输入 | `comm->channels[c].ring`（决定要连哪些 peer）+ `peerInfo[*].udsListenPath`（用于直连对端做二次握手） |
+| 输入 | `comm->channels[c].ring`（决定要连哪些 peer）+ `comm->channels[c].peers[p].transport`（**graph 模块在 §6.2.3 step 5 已贴好的后端标签**，P2P 或 SHM）+ `peerInfo[*].udsListenPath`（用于直连对端做二次握手） |
 | 输出 | `comm->channels[c].peers[p].{connSend, connRecv}`：buffer 指针 + head/tail 计数器地址 |
 | 失败模式 | P2P 不通且 SHM 也创建失败、IPC handle 交换超时 → 返回 `ncclSystemError` |
 
 **装配期实现步骤**（在 `commInit` 的 connect 阶段执行，对 channels × peers 二重循环）：
 
-1. **后端选择**：对每channel每对（本 rank, peer rank）调 `cudaDeviceCanAccessPeer`——
-   - 返回真 → 走 P2P (CUDA IPC + PBLink)
-   - 返回假 → 降级 SHM
-   - 决策结果写入 `channels[c].peers[p].transport`，运行期 kernel 不再判断；后端选择用条件分支表达，两分支足够直观，不引入 vtable 多态。
+1. **按 graph 标签分发后端**：直接读 `channels[c].peers[p].transport` 标签——P2P 走 CUDA IPC + PBLink/PCIe 分支；SHM 走 `/dev/shm` mmap 分支。**不再调 `cudaDeviceCanAccessPeer`**，可达性判断在 §6.2.3 step 5 已完成。运行期 kernel 也不再判断；后端选择用条件分支表达，两分支足够直观，不引入 vtable 多态。
 2. **导出本端 buffer**：
    - **P2P 分支**：`cudaMalloc` 分配 `buffSize` 显存 → `cudaIpcGetMemHandle` 导出为 64 字节不透明 handle。
    - **SHM 分支**：在 `/dev/shm` 创建文件 → `ftruncate(buffSize)` → `mmap` 拿到 host VA；head/tail 计数器与 buffer 同段放置。
@@ -663,29 +662,6 @@ device 模块对每个合法的 `(Op, Dtype)` 组合产出一个独立 kernel �
 | `Avg` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 
 合法实例数 = `5 op × 10 dtype + 3 op × 6 dtype = 68` 个 kernel 符号。
-
-**Kernel 符号命名约定**：
-
-```
-ncclKernel_AllReduce_Ring_Simple_{Op}_{Dtype}
-```
-
-举例：
-- `ncclKernel_AllReduce_Ring_Simple_Sum_f32`
-- `ncclKernel_AllReduce_Ring_Simple_Max_bf16`
-- `ncclKernel_AllReduce_Ring_Simple_Avg_f16`
-- `ncclKernel_AllReduce_Ring_Simple_BitwiseAnd_i32`
-
-**代码生成约定**：
-
-68 个实例远超手写规模，device 模块用 **`.cu.in` 模板 + CMake / Python 脚本** 在编译期自动展开所有合法组合的 kernel 实例化代码，并生成 host 端 `kernelTable[NUM_OPS][NUM_DTYPES]` 二维 dispatch 表（非法组合填 `nullptr`）。手工只维护 4 件事：
-
-1. 一个 `<Op, Dtype>` 参数化的 kernel 主模板（包含上面"kernel 概念性步骤"的全部 Ring 算法逻辑）；
-2. 每个 op 一个 reducer 函子（element-wise，单行实现）；
-3. 每个 dtype 一个 `{element 类型, 累加器类型}` traits；
-4. 合法组合矩阵 manifest（驱动代码生成）。
-
-**对其它模块的影响范围**：扩展 op / dtype **只触及 device + enqueue + public-api 三个模块**——bootstrap / graph / transport / comm 完全不感知 op / dtype（ringbuf 是字节级 buffer，head/tail 是 `uint64_t` 计数器，Ring 拓扑与数据语义解耦）。这是当前分层设计的核心红利。
 
 **Simple 协议原语内部实现**：每次原语调用都展开为写者 / 读者通过 ringbuf 的 tail / head 计数器配对推进——写者推 tail 通知"数据已就绪"，读者推 head 释放 slot 供写者复用。
 

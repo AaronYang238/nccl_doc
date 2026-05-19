@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 420 450" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', 'Helvetica Neue', Arial, sans-serif">
+  <rect width="420" height="450" fill="#fafafa"/>
+  <g transform="translate(-840, -60)">
+    <rect x="850" y="70" width="400" height="430" fill="#fdf4ff" stroke="#a855f7" stroke-width="2" rx="6"/>
+    <text x="1050" y="96" text-anchor="middle" font-size="13" font-weight="bold" fill="#581c87">ncclRing 结构（graph 模块输出，双向）</text>
+    <text x="1050" y="113" text-anchor="middle" font-size="9" font-style="italic" fill="#581c87">每 channel 一份；本期 nChannels = 2（前向 + 反向）</text>
+
+    <rect x="865" y="125" width="370" height="100" fill="#ffffff" stroke="#d8b4fe" stroke-width="1" rx="3"/>
+    <g font-family="'Consolas','SF Mono','Menlo',monospace" font-size="10" fill="#581c87">
+      <text x="875" y="144">struct ncclRing {</text>
+      <text x="875" y="160">  int prev;            // 上游邻居 rank</text>
+      <text x="875" y="176">  int next;            // 下游邻居 rank</text>
+      <text x="875" y="192">  int userRanks[N];    // 环上完整 rank 序列</text>
+      <text x="875" y="208">  int index;           // 本 rank 在环中位置</text>
+      <text x="875" y="220">};</text>
+    </g>
+
+    <text x="865" y="245" font-size="11" font-weight="bold" fill="#581c87">channels[0] 前向：r0 → r1 → r2 → r3 → r0</text>
+    <rect x="865" y="252" width="370" height="80" fill="#ffffff" stroke="#d8b4fe" stroke-width="1" rx="3"/>
+    <g font-family="'Consolas','SF Mono','Menlo',monospace" font-size="9.5" fill="#581c87">
+      <text x="875" y="269">rank 0:  prev=3  next=1  userRanks=[0,1,2,3]</text>
+      <text x="875" y="284">rank 1:  prev=0  next=2  userRanks=[1,2,3,0]</text>
+      <text x="875" y="299">rank 2:  prev=1  next=3  userRanks=[2,3,0,1]</text>
+      <text x="875" y="314">rank 3:  prev=2  next=0  userRanks=[3,0,1,2]</text>
+    </g>
+
+    <text x="865" y="352" font-size="11" font-weight="bold" fill="#581c87">channels[1] 反向：r0 → r3 → r2 → r1 → r0</text>
+    <rect x="865" y="359" width="370" height="80" fill="#ffffff" stroke="#d8b4fe" stroke-width="1" rx="3"/>
+    <g font-family="'Consolas','SF Mono','Menlo',monospace" font-size="9.5" fill="#581c87">
+      <text x="875" y="376">rank 0:  prev=1  next=3  userRanks=[0,3,2,1]</text>
+      <text x="875" y="391">rank 1:  prev=2  next=0  userRanks=[1,0,3,2]</text>
+      <text x="875" y="406">rank 2:  prev=3  next=1  userRanks=[2,1,0,3]</text>
+      <text x="875" y="421">rank 3:  prev=0  next=2  userRanks=[3,2,1,0]</text>
+    </g>
+
+    <text x="865" y="459" font-size="10" fill="#581c87">⚠ 反向不只是 prev/next 互换，userRanks</text>
+    <text x="865" y="474" font-size="10" fill="#581c87">  也要翻转（除起点外），确保 chunk 索引</text>
+    <text x="865" y="489" font-size="10" fill="#581c87">  与邻居语义对齐。</text>
+  </g>
+</svg>
