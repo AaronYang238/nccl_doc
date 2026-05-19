@@ -18,13 +18,13 @@
     - [4.2 进程 / 线程模型](#42-进程--线程模型)
     - [4.3 下游依赖](#43-下游依赖)
   - [5. 总体架构](#5-总体架构)
-    - [5.1 模块架构（总览）](#51-模块架构总览)
-    - [5.2 分层调用关系（精简视图）](#52-分层调用关系精简视图)
+    - [5.1 模块架构](#51-模块架构)
+    - [5.2 分层调用关系](#52-分层调用关系)
   - [6. 模块划分与职责](#6-模块划分与职责)
     - [6.1 模块清单](#61-模块清单)
     - [6.2 各模块实现思路](#62-各模块实现思路)
-      - [6.2.1 bootstrap 模块](#621-bootstrap-模块)
-      - [6.2.2 comm初始化](#622-comm初始化)
+      - [6.2.1 comm初始化](#621-comm初始化)
+      - [6.2.2 bootstrap 模块](#622-bootstrap-模块)
       - [6.2.3 graph 模块](#623-graph-模块)
       - [6.2.4 transport 模块](#624-transport-模块)
       - [6.2.5 enqueue 模块](#625-enqueue-模块)
@@ -176,11 +176,11 @@ GPU kernel 启动后**自主在 device 上推进**，host 与其它 rank 之间�
 
 ## 5. 总体架构
 
-### 5.1 模块架构（总览）
+### 5.1 模块架构
 
 ![AllReduce 库分层架构 v2.0](allreduce-arch-layered-v2.0.svg)
 
-### 5.2 分层调用关系（精简视图）
+### 5.2 分层调用关系
 
 ```mermaid
 flowchart LR
@@ -223,8 +223,8 @@ flowchart LR
 | 模块 | 职责描述 |
 |---|---|
 | **public-api** | 对外暴露 C ABI 公开符号，承接调用方的所有交互。本模块**只做轻量参数合法性检查**（指针非空、数值范围、`comm->state` 合法），不做任何语义解析（不展开 dtype/op 的具体含义、不做 GPU 选择、不做内存分配），随后**把请求转交内部对应模块**（`commInit` → comm；`ncclAllReduce` → enqueue；查询类直接读 comm 字段）。它是稳定 ABI 的物理边界，C++ 内部签名调整不会外溢。 |
-| **bootstrap** | 装配链路的第一站。通过 UDS socket 把所有 N 个 rank 拉到同一会合点，做**同步屏障**（确保 N 个 rank 都到齐）；并让每个 rank 各自起一个常驻的 UDS 监听 socket，把自己的 listen 路径塞进 `peerInfo` 上报。完成后所有 rank 都拿到一份完整的 `peerInfo[]`（**含所有 rank 的 `udsListenPath`**），transport 后续按此直接 rank i ↔ rank j P2P 交换 IPC handle / SHM 路径，无需经 rank 0 中转。单进程多线程场景跳过，直接走全局变量。 |
 | **comm**（init / commLifecycle）| `commInit / commDestroy / commAbort / commGetAsyncError` 四个 API 的总编排器。commInit对内按顺序调度 bootstrap → graph → transport → devComm 装配，维护 `comm->state` 字段表示当前阶段。本模块本身不做拓扑分析、不做建连、不做 GPU 数据搬运，只负责**调度顺序、状态推进、错误传播和异常逃生**（`abortFlag` / `fatalError`）。 |
+| **bootstrap** | 装配链路的第一站。通过 UDS socket 把所有 N 个 rank 拉到同一会合点，做**同步屏障**（确保 N 个 rank 都到齐）；并让每个 rank 各自起一个常驻的 UDS 监听 socket，把自己的 listen 路径塞进 `peerInfo` 上报。完成后所有 rank 都拿到一份完整的 `peerInfo[]`（**含所有 rank 的 `udsListenPath`**），transport 后续按此直接 rank i ↔ rank j P2P 交换 IPC handle / SHM 路径，无需经 rank 0 中转。单进程多线程场景跳过，直接走全局变量。 |
 | **graph** | 装配期完成"**获取硬件拓扑 + 构造 Ring 序列 + 给每条边贴 transport 后端标签**"三件事。XML 拓扑文件存在则直接解析，不存在则现场调 NVML / sysfs / `/proc/cpuinfo` 扫描并落盘复用；得到的拓扑树用于填充代价矩阵（PBLink direct / 同 switch / 同 CPU / 跨 NUMA / 不可达），再用贪心 + 2-opt 搜出总代价最低的 Hamilton 环，输出 prev/next 两份序列（前向 + 反向，对应 `nChannels = 2`）；同时按 cost 给每条边贴 P2P / SHM 后端标签。结果写入 `comm->channels[*].ring` 与 `comm->channels[*].peers[*].transport` 后固化，运行期不再活跃。 |
 | **transport** | 装配期**建立每个 channel 中两节点间数据通路**。具体做法：**读 graph 模块写好的 `peers[p].transport` 标签**决定走 P2P (CUDA IPC + PBLink / PCIe) 主路径还是 SHM (`/dev/shm` mmap) 备用路径（**不重复调 `cudaDeviceCanAccessPeer`**）；分配本端 ringbuf、导出 IPC handle / SHM 路径、按 `peerInfo[peer].udsListenPath` 直连对端做 P2P 二次握手交换 handle、映射对端 buffer 到本端虚拟地址空间。装配完成后，运行期 device kernel 直接通过虚拟地址 `store / load` 远端 ringbuf，transport 层不再参与。 |
 | **enqueue** | 运行期 host 侧的实现入口，是**热路径中唯一的 host 模块**。每次用户调 `ncclAllReduce` 都进入这里，按四步执行：参数校验 → 查档位表得到 `(nChannels, nThreads)` → 填 `ncclWorkElem` 工作描述符 → 调 `cudaLaunchKernel` 把 kernel 推到用户传入的 stream 上。约束严格：不做任何运行时决策、不做 host 侧通信、不做内存分配；返回 `ncclSuccess` 仅表示入队成功。 |
@@ -234,9 +234,77 @@ flowchart LR
 
 ### 6.2 各模块实现思路
 
-#### 6.2.1 bootstrap 模块
+#### 6.2.1 comm初始化
 
-**模块定位**：bootstrap 在 `commInit` 阶段执行进程间同步握手。它通过一条预先约定的 UDS socket（从uniqueID解析而来）把所有 N 个 rank 拉到同一会合点，等所有 rank 都到达后再继续推进；并在此过程中**让每个 rank 各自起一个自己的 UDS 监听 socket**，把"自己的 listen 路径 + 基本信息"打包进 `peerInfo` 上报。bootstrap 执行完后，每个 rank 都拿到完整的 `peerInfo[]`（含**所有 rank 的 UDS 监听路径**），后续 graph 模块据此分析 GPU 拓扑，transport 模块据此直接 rank i ↔ rank j P2P 交换 IPC handle / SHM 路径，**无需经 rank 0 中转**。
+**模块作用**：装配期涉及多个模块按特定顺序协作（bootstrap → graph → transport → devComm），任一步失败都必须能干净清理、不让残留资源拖死后续——所以必须有一个**总编排器 + 状态机**来串这条链。
+
+**模块定位**：负责 communicator 的生命周期管理。它对外暴露 `commInit` / `commDestroy` / `commAbort` / `commGetAsyncError` 四个 API，对内按顺序调用 bootstrap、graph、transport 和 devComm 装配，并维护 `comm->state` 字段表示 communicator 当前所处的阶段。其它模块通过读 `comm->state` 判断当前 comm 是否可用。
+
+**要做的工作**：
+- **生命周期编排**：`commInit` 按 Bootstrapping → Discovering → Connecting → Active 顺序串调 bootstrap / graph / transport，并在最后把 `devComm` 拷到 GPU。
+- **状态机维护**：每个阶段对应一个 `comm->state`，保证调用方在错误时机不能继续推进（如 `Failed` 状态下 enqueue 必须拒绝入队）。
+- **错误收敛**：任一阶段失败 → `state = Failed` → 走清理路径返回错误码；提供 `commGetAsyncError` 让外部线程异步查询运行期错误。
+- **异常逃生入口**：`commAbort` 置位 `abortFlag`，让 GPU kernel 主动跳出 spin；`commDestroy` 等待 kernel 自然结束后释放资源。
+
+**输入与输出**：
+
+| 项 | 内容 |
+|---|---|
+| 入口 | `ncclCommInit / Destroy / Abort / GetAsyncError` |
+| 持有状态 | `comm->state`、`comm->fatalError`、`comm->abortFlag`、`comm->devComm` |
+| 协作模块 | 串行调用 bootstrap → graph → transport → 装配 devComm |
+
+**状态机**：
+
+```mermaid
+stateDiagram-v2
+  [*] --> Uninit
+  Uninit --> Bootstrapping: commInit
+  Bootstrapping --> Discovering: peerInfo 收齐
+  Discovering --> Connecting: Ring 构造完成
+  Connecting --> Active: devComm 拷贝完成
+  Bootstrapping --> Failed: 握手失败
+  Discovering --> Failed: 拓扑/Ring 失败
+  Connecting --> Failed: 建连失败
+  Active --> Destroying: commDestroy
+  Active --> Aborting: commAbort / fatalError
+  Destroying --> Freed
+  Aborting --> Freed
+  Failed --> Freed: commDestroy / Abort
+  Freed --> [*]
+```
+
+**`ncclCommInit` 实现流程**：
+
+1. **预备**：分配 `comm` 结构，设 `state = Uninit`；`cudaGetDevice` 校验调用线程绑定的 device 与传入参数一致。
+2. **Bootstrapping**：`state = Bootstrapping` → 调 bootstrap 模块（§6.2.2）完成同步握手 → 拿到 `peerInfo[]`。
+3. **Discovering**：`state = Discovering` → 调 graph 模块（§6.2.3）做拓扑发现 + Ring 构造 → 结果写入 `comm->channels[*].ring`。
+4. **Connecting**：`state = Connecting` → 调 transport 模块（§6.2.4）逐 (channel, peer) 建连 → `cudaMalloc` 分配本端 ringbuf → 写入 `comm->channels[*].peers[*]`。
+5. **DevComm 装配**：把 `comm` 中需要在 GPU 端访问的字段（ring 邻居、ringbuf 指针、abortFlag 指针等）打包到 `ncclDevComm` 结构 → `cudaMemcpyAsync` 拷到 GPU global memory → `comm->devComm` 指向之。
+6. **Active**：`state = Active` → 返回 `ncclSuccess`，从此可接收 `ncclAllReduce` 调用。
+
+任一步骤失败 → `state = Failed` → 走清理路径（与 Destroy 共享），返回错误码。
+
+**`ncclCommDestroy` 实现**：
+1. `state = Destroying`，拒绝新的 AllReduce 入队。等当前执行kernel完成（`cudaStreamSynchronize` 或显式 event 等待）。
+2. `cudaIpcCloseMemHandle` / SHM `munmap` → `cudaFree` ringbuf → 释放 `peerInfo[]` → 释放 `comm` 结构。
+
+**`ncclCommAbort` 实现**（异常逃生路径，与 Destroy 共享清理代码）：
+1. `state = Aborting`，拒绝新的入队。置 `*abortFlag = 1`（host写，GPU 读）。
+2. 等 kernel 看到 flag 后 `return`。
+3. 进入与 Destroy 相同的资源释放路径。
+
+**`ncclCommGetAsyncError` 实现**：原子读 `comm->fatalError` 返回。这是少数允许上层应用查询接口，便于训练框架在另一个线程做健康检查；检测到错误后调用方应主动调 `commAbort` 完成清理。
+
+**错误传播路径**：
+- 装配期失败 → 当前调用线程同步返回错误码。
+- 运行期 kernel hang / peer 失联 → 由检测者（kernel 内 spin 超时检查 / host 侧轮询 / **主要是RDMA proxy线程，当前版本暂未添加**）写 `comm->fatalError` → 调用方通过 `commGetAsyncError` 看到 → 主动调 `commAbort` 终结整 comm。
+
+#### 6.2.2 bootstrap 模块
+
+**模块作用**：N 个独立 rank 进程之间没有任何公共上下文，必须先有一个"会合点"让它们互相发现并交换"我是谁"。
+
+**模块定位**：bootstrap 在 `commInit` 阶段执行进程间同步握手。它通过一条预先约定的 UDS socket（从uniqueID解析而来）**把所有 N 个 rank 拉到同一会合点**，等所有 rank 都到达后再继续推进；并在此过程中**让每个 rank 各自起一个自己的 UDS 监听 socket**，把"自己的 listen 路径 + 基本信息"打包进 `peerInfo` 上报。bootstrap 执行完后，每个 rank 都拿到完整的 `peerInfo[]`（含**所有 rank 的 UDS 监听路径**），后续 graph 模块据此分析 GPU 拓扑，transport 模块据此直接 rank i ↔ rank j P2P 交换 IPC handle / SHM 路径，**无需经 rank 0 中转**。
 
 **输入与输出**：
 
@@ -251,7 +319,7 @@ flowchart LR
 
 **UDS 方案同步流程**：
 
-> 图 6.2.1-1：UDS 同步握手时序——各 rank 先起自己的监听 → rank 0 在会合路径上等齐 N-1 份上报 → 一致性校验 → rank 0 广播完整 peerInfo[]
+> 图 6.2.2-1：UDS 同步握手时序——各 rank 先起自己的监听 → rank 0 在会合路径上等齐 N-1 份上报 → 一致性校验 → rank 0 广播完整 peerInfo[]
 
 ```mermaid
 sequenceDiagram
@@ -318,71 +386,9 @@ rank i (i ≥ 1):
   5. 关闭与 rank 0 的会合连接;保留 UDSSocketPath.i 上的 listen socket
 ```
 
-#### 6.2.2 comm初始化
-
-**模块定位**：负责 communicator 的生命周期管理。它对外暴露 `commInit` / `commDestroy` / `commAbort` / `commGetAsyncError` 四个 API，对内按顺序调用 bootstrap、graph、transport 和 devComm 装配，并维护 `comm->state` 字段表示 communicator 当前所处的阶段。其它模块通过读 `comm->state` 判断当前 comm 是否可用。
-
-**要做的工作**：
-- **生命周期编排**：`commInit` 按 Bootstrapping → Discovering → Connecting → Active 顺序串调 bootstrap / graph / transport，并在最后把 `devComm` 拷到 GPU。
-- **状态机维护**：每个阶段对应一个 `comm->state`，保证调用方在错误时机不能继续推进（如 `Failed` 状态下 enqueue 必须拒绝入队）。
-- **错误收敛**：任一阶段失败 → `state = Failed` → 走清理路径返回错误码；提供 `commGetAsyncError` 让外部线程异步查询运行期错误。
-- **异常逃生入口**：`commAbort` 置位 `abortFlag`，让 GPU kernel 主动跳出 spin；`commDestroy` 等待 kernel 自然结束后释放资源。
-
-**输入与输出**：
-
-| 项 | 内容 |
-|---|---|
-| 入口 | `ncclCommInit / Destroy / Abort / GetAsyncError` |
-| 持有状态 | `comm->state`、`comm->fatalError`、`comm->abortFlag`、`comm->devComm` |
-| 协作模块 | 串行调用 bootstrap → graph → transport → 装配 devComm |
-
-**状态机**：
-
-```mermaid
-stateDiagram-v2
-  [*] --> Uninit
-  Uninit --> Bootstrapping: commInit
-  Bootstrapping --> Discovering: peerInfo 收齐
-  Discovering --> Connecting: Ring 构造完成
-  Connecting --> Active: devComm 拷贝完成
-  Bootstrapping --> Failed: 握手失败
-  Discovering --> Failed: 拓扑/Ring 失败
-  Connecting --> Failed: 建连失败
-  Active --> Destroying: commDestroy
-  Active --> Aborting: commAbort / fatalError
-  Destroying --> Freed
-  Aborting --> Freed
-  Failed --> Freed: commDestroy / Abort
-  Freed --> [*]
-```
-
-**`ncclCommInit` 实现流程**：
-
-1. **预备**：分配 `comm` 结构，设 `state = Uninit`；`cudaGetDevice` 校验调用线程绑定的 device 与传入参数一致。
-2. **Bootstrapping**：`state = Bootstrapping` → 调 bootstrap 模块（§6.2.1）完成同步握手 → 拿到 `peerInfo[]`。
-3. **Discovering**：`state = Discovering` → 调 graph 模块（§6.2.3）做拓扑发现 + Ring 构造 → 结果写入 `comm->channels[*].ring`。
-4. **Connecting**：`state = Connecting` → 调 transport 模块（§6.2.4）逐 (channel, peer) 建连 → `cudaMalloc` 分配本端 ringbuf → 写入 `comm->channels[*].peers[*]`。
-5. **DevComm 装配**：把 `comm` 中需要在 GPU 端访问的字段（ring 邻居、ringbuf 指针、abortFlag 指针等）打包到 `ncclDevComm` 结构 → `cudaMemcpyAsync` 拷到 GPU global memory → `comm->devComm` 指向之。
-6. **Active**：`state = Active` → 返回 `ncclSuccess`，从此可接收 `ncclAllReduce` 调用。
-
-任一步骤失败 → `state = Failed` → 走清理路径（与 Destroy 共享），返回错误码。
-
-**`ncclCommDestroy` 实现**：
-1. `state = Destroying`，拒绝新的 AllReduce 入队。等当前执行kernel完成（`cudaStreamSynchronize` 或显式 event 等待）。
-2. `cudaIpcCloseMemHandle` / SHM `munmap` → `cudaFree` ringbuf → 释放 `peerInfo[]` → 释放 `comm` 结构。
-
-**`ncclCommAbort` 实现**（异常逃生路径，与 Destroy 共享清理代码）：
-1. `state = Aborting`，拒绝新的入队。置 `*abortFlag = 1`（host写，GPU 读）。
-2. 等 kernel 看到 flag 后 `return`。
-3. 进入与 Destroy 相同的资源释放路径。
-
-**`ncclCommGetAsyncError` 实现**：原子读 `comm->fatalError` 返回。这是少数允许上层应用查询接口，便于训练框架在另一个线程做健康检查；检测到错误后调用方应主动调 `commAbort` 完成清理。
-
-**错误传播路径**：
-- 装配期失败 → 当前调用线程同步返回错误码。
-- 运行期 kernel hang / peer 失联 → 由检测者（kernel 内 spin 超时检查 / host 侧轮询 / **主要是RDMA proxy线程，当前版本暂未添加**）写 `comm->fatalError` → 调用方通过 `commGetAsyncError` 看到 → 主动调 `commAbort` 终结整 comm。
-
 #### 6.2.3 graph 模块
+
+**模块作用**：GPU 间物理连接代价差异巨大（PBLink 与跨 NUMA 相差 50 倍），Ring 走错路径性能塌方——必须在装配期**一次性把拓扑复杂性消化成"边代价 + 后端标签"**，让运行期只面对最优环。
 
 **模块定位**：graph 在装配期完成两件事——**获取全局拓扑描述**（优先读取已有 XML 文件；不存在则现场调 NVML / sysfs 扫描生成并落盘），识别本节点 GPU 间的硬件连接（哪些 GPU 之间能直连、用什么介质、距离几跳）；并在此基础上**构造N条让总通信代价最低的 Ring 序列**（每 rank 在环中的 prev / next）。输入是 bootstrap 提供的 `peerInfo[]`、NVML、sysfs（XML 文件若不存在会被自动生成），输出是 `comm->channels[c].ring`。Ring 序列在 `commInit` 末写入 communicator 后固化，运行期 GPU kernel 直接读取使用，不再做与路由相关的决策。
 
@@ -464,6 +470,8 @@ stateDiagram-v2
 
 #### 6.2.4 transport 模块
 
+**模块作用**：GPU kernel 要像访问本地内存一样访问远端 GPU 显存，但远端 buffer 默认在另一个进程的地址空间里 GPU 指令访问不到——transport 在装配期**把远端 buffer 映射进本端虚拟地址空间**，运行期 host 完全不参与。
+
 **模块定位**：transport 在装配期建立 peer 间的数据通路。具体做法是把对端 rank 的 GPU buffer（P2P 路径，通过 CUDA IPC）或 SHM 段（备用路径，通过 `/dev/shm` mmap）映射到本端的虚拟地址空间，使本端 GPU 可以通过普通指针直接 `store / load` 远端 buffer。装配完成后，运行期 device kernel 直接通过这些虚拟地址访问对端 ringbuf，transport 层不再参与。
 
 **输入与输出**：
@@ -491,7 +499,7 @@ stateDiagram-v2
    - `connRecv.head`：Simple 协议中"读者推进、写者 spin"的 head 计数器虚拟地址（位于 writer HBM）。
    - **本步只写 host 内存，GPU kernel 此时还看不到这些指针**。
 
-6. **指针下发到 HBM（与 §6.2.2 Step 5 协同）**：transport 完成 host 端写入后，init / commLifecycle 接管：
+6. **指针下发到 HBM（与 §6.2.1 Step 5 协同）**：transport 完成 host 端写入后，init / commLifecycle 接管：
    - 把 `channels[*].peers[*]` 中 kernel 运行期会用到的字段（ringbuf 指针、tail / head 地址、ring 邻居 prev/next、abortFlag 指针）打包到 `ncclDevComm` 结构。
    - `cudaMalloc` 在 GPU HBM 分配 `ncclDevComm` 空间 → `cudaMemcpyAsync` 把 host 打包好的结构拷到 GPU 端 → `comm->devComm` 记下 GPU 端地址。
    - enqueue 在 launch kernel 时把 `comm->devComm` 作为 kernel 参数传入；kernel 启动后通过 `ncclShmem.comm` 引用 `ncclDevComm`，从 HBM 读出这些指针，再 dereference 访问真正的 ringbuf / 计数器。
@@ -512,6 +520,8 @@ stateDiagram-v2
 只服务 Simple 协议，每 channel 一份 buffer 足够（LL/LL128 才需额外的 flag buffer）。两种后端通过同一 ABI（`buffs + head/tail` 指针对）暴露给 kernel，布局差异在装配期吸收；运行期 kernel 拿到的就是普通虚拟地址指针，store/load 直接走硬件路径，host 侧不需要任何辅助线程。
 
 #### 6.2.5 enqueue 模块
+
+**模块作用**：用户视角的"一次 API 调用"必须翻译成 GPU 视角的"一次 kernel 提交"——enqueue 是这个翻译器：填好工作描述符并 `cudaLaunchKernel`，**入队即返回**，完成由 stream 异步保证。
 
 **模块定位**：enqueue 是运行期 host 侧的实现入口。每次用户调 `ncclAllReduce`，都进入这个模块，按固定四步执行：参数校验 → 查档位表得到 `(nChannels, nThreads)` 并派生 chunkSize → 填工作描述符 → 调 `cudaLaunchKernel`。本模块不做任何运行时决策、不做 host 侧通信、不做内存分配——这些工作都已在装配期完成。
 
@@ -547,6 +557,8 @@ stateDiagram-v2
 **异步性边界**：API 返回 ≠ 操作完成；完成可见性需要用户通过 stream 同步获得，与 CUDA stream 的标准语义对齐。
 
 #### 6.2.6 device 模块
+
+**模块作用**：算法的实际执行（GPU 间搬数据 + 元素累加 + 邻居同步）只能在 GPU 上完成——device 是整个库**唯一在 GPU 上跑的代码**，其它 5 个模块全部为它服务（提供资源 / 数据 / 参数）。
 
 **模块定位**：device 是整个库唯一在 GPU 上运行的模块，其它模块都是 host C++ 代码。它实现 Ring AllReduce 的 GPU kernel，模板维度 `<Ring, Simple, Op, Dtype>`——算法 / 协议固定为 `(Ring, Simple)`，op 与 dtype 按下文支持矩阵分别产出独立 kernel 符号 `ncclKernel_AllReduce_Ring_Simple_{Op}_{Dtype}`（共约 68 个实例）。kernel 由 enqueue 模块 launch 之后，从 `ncclDevComm` 读取本 rank 的 ring 邻居、ringbuf 指针、`abortFlag` 指针，按 Ring 算法的 `2N-1` 步原语调用顺序推进，不需要 host 介入，直到处理完用户传入的整个张量。
 
@@ -810,7 +822,7 @@ sequenceDiagram
 | 项 | 描述 | 主要触及模块 | 优先级 |
 |---|---|---|---|
 | **RDMA 后端** | 支持跨节点通信（InfiniBand / RoCE）；transport 增加 NET 后端，与 P2P / SHM 三者并列；bootstrap 扩展 OOB 通道（TCP / IB CM）替代纯 UDS | transport（新增 NET）/ bootstrap | P1 |
-| **proxy 代理线程** | host 侧常驻代理线程，负责 RDMA 数据搬运调度 + 运行期 hang 检测；检测超时后写 `comm->fatalError`（呼应 §6.2.2 错误传播路径里"主要是 RDMA proxy 线程，当前版本暂未添加"） | comm / transport | P1 |
+| **proxy 代理线程** | host 侧常驻代理线程，负责 RDMA 数据搬运调度 + 运行期 hang 检测；检测超时后写 `comm->fatalError`（呼应 §6.2.1 错误传播路径里"主要是 RDMA proxy 线程，当前版本暂未添加"） | comm / transport | P1 |
 | **其他集合通信** | broadcast / reduce / all-gather / reduce-scatter / all-to-all / gather / scatter；其中 reduce-scatter / all-gather 是 AllReduce 的两半，复用率最高 | device / enqueue / public-api | P2 |
 | **点对点通信** | `ncclSend` / `ncclRecv` 原语；不走 Ring 算法，直接走 transport 链路；用于流水并行 (pipeline parallelism) 等场景 | device / enqueue / public-api | P2 |
 
