@@ -318,13 +318,6 @@ rank i (i ≥ 1):
   5. 关闭与 rank 0 的会合连接;保留 UDSSocketPath.i 上的 listen socket
 ```
 
-**实现要点**：
-- 监听先于上报：rank i 必须**先**完成 `bind + listen(udsListenPath)` 再向 rank 0 上报，否则 `peerInfo` 广播后其它 rank 立刻发起 transport 二次握手 connect 时会 ENOENT / ECONNREFUSED。
-- 步骤 3（rank 0 视角）是显式同步点——rank 0 必须收齐 N-1 份才进入广播；其它 rank 阻塞在 `recv` 上，保证看到的是所有 rank 都已上报后的完整数组。
-- 一致性校验：rank 0 收到的 `peerInfo[i].nranks` 必须与自身一致，否则提前失败，避免后续 graph / transport 阶段才暴露不匹配。TODO：后续可在 uniqueId 中加入其他一致性校验字段（版本号、参与者集合摘要等）。
-- **二次握手**：transport 层后续按 (channel, peer) 二维直接交换 IPC handle / SHM 路径——rank i 用 `peerInfo[j].udsListenPath` connect rank j 的常驻监听 socket，**不再走 rank 0 中转**；rank 0 也不再是带宽瓶颈。
-- 监听 socket 生命周期：所有 `udsListenPath` 上的 listen socket 由 bootstrap 创建后**长期保留**，直到 `commDestroy` 才统一 close + `unlink(udsListenPath)`，避免文件系统残留。
-
 #### 6.2.2 comm初始化
 
 **模块定位**：负责 communicator 的生命周期管理。它对外暴露 `commInit` / `commDestroy` / `commAbort` / `commGetAsyncError` 四个 API，对内按顺序调用 bootstrap、graph、transport 和 devComm 装配，并维护 `comm->state` 字段表示 communicator 当前所处的阶段。其它模块通过读 `comm->state` 判断当前 comm 是否可用。
