@@ -132,7 +132,7 @@ GPU kernel 启动后**自主在 device 上推进**，host 与其它 rank 之间�
 
 | ID | 需求 | 用户视角 |
 |---|---|---|
-| F1 | Communicator 生命周期 | `commInit(comm, nranks, rank, UDSSocketPath)` / `commDestroy(comm)` / `commAbort(comm)` |
+| F1 | Communicator 生命周期 | `ncclGetUniqueId(&uid)`（rank 0 调，应用层带外分发）/ `commInit(comm, nranks, rank, UDSSocketPath)` / `commDestroy(comm)` / `commAbort(comm)` |
 | F2 | AllReduce 原语 | `allReduce(sendbuf, recvbuf, count, dtype, op, comm, stream)`；支持的 `(op, dtype)` 组合见 §6.2.6 |
 | F3 | 装配期拓扑发现 | 自动识别 GPU 间 PBLink / PCIe / IPC 可达性 |
 | F4 | 异步错误轮询 | `commGetAsyncError(comm, &err)` |
@@ -206,7 +206,7 @@ flowchart LR
     R_KERN -. "spin 时检查" .-> R_ABORT
   end
 
-  INIT == "<b>commInit产物</b><br/>Ring 序列、远端 ringbuf 指针、 abortFlag 指针、 档位表" ==> RUN
+  INIT == "<b>commInit 产物</b><br/><b>CPU 侧</b>：档位表 + peerInfo[] + channels[*].peers[*] 后端标签<br/><br/><b>GPU 侧（HBM 内）</b>：Ring 序列（prev / next / userRanks）<br/>+ 远端 ringbuf 指针 + abortFlag 指针" ==> RUN
 
   classDef p_init fill:#faf5ff,stroke:#9333ea,stroke-width:2px;
   classDef p_run fill:#eff6ff,stroke:#2563eb,stroke-width:2px;
@@ -304,13 +304,13 @@ stateDiagram-v2
 
 **模块作用**：N 个独立 rank 进程之间没有任何公共上下文，必须先有一个"会合点"让它们互相发现并交换"我是谁"。
 
-**模块定位**：bootstrap 在 `commInit` 阶段执行进程间同步握手。它通过一条预先约定的 UDS socket（从uniqueID解析而来）**把所有 N 个 rank 拉到同一会合点**，等所有 rank 都到达后再继续推进；并在此过程中**让每个 rank 各自起一个自己的 UDS 监听 socket**，把"自己的 listen 路径 + 基本信息"打包进 `peerInfo` 上报。bootstrap 执行完后，每个 rank 都拿到完整的 `peerInfo[]`（含**所有 rank 的 UDS 监听路径**），后续 graph 模块据此分析 GPU 拓扑，transport 模块据此直接 rank i ↔ rank j P2P 交换 IPC handle / SHM 路径，**无需经 rank 0 中转**。
+**模块定位**：bootstrap 在 `commInit` 阶段执行进程间同步握手。它通过一条预先约定的 UDS socket（从uniqueID解析而来，由rank 0创建，带外分发到其他rank，本质为UDS socket）**把所有 N 个 rank 拉到同一会合点**，等所有 rank 都到达后再继续推进；并在此过程中**让每个 rank 各自起一个自己的 UDS 监听 socket**，把"自己的 listen 路径 + 基本信息"打包进 `peerInfo` 上报。bootstrap 执行完后，每个 rank 都拿到完整的 `peerInfo[]`（含**所有 rank 的 UDS 监听路径**），后续 graph 模块据此分析 GPU 拓扑，transport 模块据此直接 rank i ↔ rank j P2P 交换 IPC handle / SHM 路径，**无需经 rank 0 中转**。
 
 **输入与输出**：
 
 | 项 | 内容 |
 |---|---|
-| 输入 | `nranks`, `rank`, `UDSSocketPath`（会合用 UDS 路径——rank 0 在此监听，其它 rank 主动 connect 上报） |
+| 输入 | `nranks`, `rank`, `UDSSocketPath`（会合用 UDS 路径，**由 rank 0 调 `ncclGetUniqueId` 生成后由应用层带外分发**——rank 0 在此监听，其它 rank 主动 connect 上报） |
 | 输出 | `peerInfo[nranks]`，每项含 `{ busId, pid, nranks, udsListenPath }`（`udsListenPath` 是该 rank 自己监听的 UDS 路径，供 transport 二次握手时直连） |
 | 副作用 | 本 rank 持有一个长期监听的 UDS socket（绑定在 `udsListenPath`），生命周期与 comm 同步——`commDestroy` 时才 close + unlink |
 | 失败模式 | 路径不存在 / 权限不足 / 连接超时 / 各 rank `nranks` 不一致 / 本 rank `udsListenPath` 创建失败 → 返回 `ncclSystemError`，调用方释放 comm |
@@ -319,53 +319,50 @@ stateDiagram-v2
 
 **UDS 方案同步流程**：
 
-> 图 6.2.2-1：UDS 同步握手时序——各 rank 先起自己的监听 → rank 0 在会合路径上等齐 N-1 份上报 → 一致性校验 → rank 0 广播完整 peerInfo[]
+> 图 6.2.2-1：UDS 同步握手时序——uniqueID 生成与带外分发 → 各 rank 调 commInit → rank i 上报 peerInfo → rank 0 同步屏障 → rank 0 广播完整 peerInfo[]
 
 ```mermaid
 sequenceDiagram
     autonumber
     participant App0 as 应用<br/>(rank 0)
+    participant AppI as 应用<br/>(rank i)
     box 集合通信库 (libnccl.so)
     participant R0 as rank 0<br/>(协调者)
     participant Ri as rank i<br/>(i = 1 ~ N-1)
     end
-    participant AppI as 应用<br/>(rank i)
 
-    App0->>R0: commInit(nranks, 0, UDSSocketPath)
-    AppI->>Ri: commInit(nranks, i, UDSSocketPath)
+    App0->>R0: ncclGetUniqueId(uid)
+    R0-->>App0: 返回 uniqueID<br/>（含约定 UDSSocketPath）
+    App0->>AppI: 带外分发 uniqueID
 
-    Note over R0: bind+listen UDSSocketPath<br/>会合监听<br/>同时作为 rank 0 的 udsListenPath
-    Note over Ri: bind+listen UDSSocketPath.i<br/>本 rank 自己的 udsListenPath
-
-    rect rgb(255, 247, 230)
-    Note over R0,Ri: 阶段 A · 各 rank 上报 peerInfo 含自己的 udsListenPath
-    loop 每个 i = 1 ~ N-1 并发执行
-        Ri->>Ri: retry connect UDSSocketPath<br/>退避重试 ~5s 超时
-        Ri->>R0: connect 成功 → accept conn i
-        Ri->>R0: send peerInfo i<br/>busId + pid + nranks<br/>udsListenPath = UDSSocketPath.i
-    end
+    par 所有 rank 几乎同时调 commInit
+        App0->>R0: commInit(nranks, 0, UDSSocketPath)
+    and
+        AppI->>Ri: commInit(nranks, i, UDSSocketPath)
     end
 
-    Note over R0: 同步屏障<br/>等齐 N-1 份 peerInfo<br/>peerInfo 0 = self<br/>udsListenPath = UDSSocketPath<br/>校验各 rank nranks 一致
+    Note over R0,Ri: 各 rank bind + listen 自己的 udsListenPath
 
-    rect rgb(230, 245, 255)
-    Note over R0,Ri: 阶段 B · rank 0 广播完整数组
-    loop 每个 i = 1 ~ N-1
-        R0->>Ri: send peerInfo 数组<br/>含全部 rank 的 udsListenPath
-    end
-    end
+    Ri->>R0: connect UDSSocketPath + send peerInfo[i]
 
-    Note over R0,Ri: 会合连接关闭<br/>各 rank 的 udsListenPath<br/>保持监听供 transport 直连
+    Note over R0: 同步屏障 · 等齐 N-1 份 peerInfo + 一致性校验
 
-    R0-->>App0: bootstrap 完成 返回 peerInfo 数组
-    Ri-->>AppI: bootstrap 完成 返回 peerInfo 数组
+    R0->>Ri: send peerInfo[*]
 
-    Note over App0,AppI: graph / transport 据此继续装配<br/>transport 用 udsListenPath 做 P2P 二次握手
+    Note over R0,Ri: 会合连接关闭；各 udsListenPath 保持监听供 transport 二次握手
+
+    R0-->>App0: ncclSuccess
+    Ri-->>AppI: ncclSuccess
 ```
 
 **伪代码对照**：
 
 ```
+// 前置条件 (由应用层完成,不在库内):
+//   ① rank 0 调 ncclGetUniqueId 生成 uniqueID (含约定 UDSSocketPath)
+//   ② 应用层通过 MPI / 文件 / 环境变量带外分发 uniqueID 给所有 rank
+//   ③ 各 rank 从 uniqueID 解析出 UDSSocketPath 作为 commInit 参数
+
 rank 0 (协调者):
   1. bind+listen(UDSSocketPath)               // 会合路径,同时作为自己的 udsListenPath
   2. for i in 1..N-1: conn[i] = accept()       // 接受 N-1 个会合连接
@@ -388,7 +385,7 @@ rank i (i ≥ 1):
 
 #### 6.2.3 graph 模块
 
-**模块作用**：GPU 间物理连接代价差异巨大（PBLink 与跨 NUMA 相差 50 倍），Ring 走错路径性能塌方——必须在装配期**一次性把拓扑复杂性消化成"边代价 + 后端标签"**，让运行期只面对最优环。
+**模块作用**：GPU 间物理连接代价差异巨大（PBLink 与跨 NUMA 交互带宽/时延差距较大），Ring 走错路径性能塌方——必须在装配期**一次性把拓扑复杂性消化成"边代价 + 后端标签"**，让运行期只面对最优环。
 
 **模块定位**：graph 在装配期完成两件事——**获取全局拓扑描述**（优先读取已有 XML 文件；不存在则现场调 NVML / sysfs 扫描生成并落盘），识别本节点 GPU 间的硬件连接（哪些 GPU 之间能直连、用什么介质、距离几跳）；并在此基础上**构造N条让总通信代价最低的 Ring 序列**（每 rank 在环中的 prev / next）。输入是 bootstrap 提供的 `peerInfo[]`、NVML、sysfs（XML 文件若不存在会被自动生成），输出是 `comm->channels[c].ring`。Ring 序列在 `commInit` 末写入 communicator 后固化，运行期 GPU kernel 直接读取使用，不再做与路由相关的决策。
 
@@ -735,6 +732,7 @@ sequenceDiagram
   participant Trans as transport
   participant GPU as CUDA driver
 
+  Note over App: 前置：rank 0 调 ncclGetUniqueId 生成 uniqueID<br/>应用层带外分发 uniqueID 给所有 rank
   App->>Init: commInit(comm, nranks, rank, UDSSocketPath)
   Init->>Init: cudaSetDevice 校验 + 分配 comm
   Init->>Boot: 同步握手 (UDS)
@@ -833,9 +831,14 @@ sequenceDiagram
 ### 公开 ABI
 
 ```c
-// 生命周期 (3)
+// 生命周期 (4)
+// 启动流程:
+//   ① rank 0 调 ncclGetUniqueId 生成 uniqueID (含约定 UDSSocketPath)
+//   ② 应用层通过 MPI / 文件 / 环境变量带外分发 uniqueID 给所有 rank
+//   ③ 各 rank 从 uniqueID 解析出 UDSSocketPath,传给 ncclCommInit
 // UDSSocketPath: 多进程场景所有 rank 必须传同一路径(UDS socket 路径,
 //                 用于交换 peerInfo + IPC handle); 单进程多 GPU 场景可传 NULL。
+ncclResult_t ncclGetUniqueId(ncclUniqueId *out);
 ncclResult_t ncclCommInit(ncclComm_t* comm, int nranks, int rank,
                           const char* UDSSocketPath);
 ncclResult_t ncclCommDestroy(ncclComm_t comm);

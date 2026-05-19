@@ -138,11 +138,11 @@
 
     <rect x="520" y="640" width="340" height="80" fill="#c4b5fd" rx="4"/>
     <text x="690" y="670" text-anchor="middle" font-size="13" font-weight="bold" fill="#4c1d95">search</text>
-    <text x="690" y="697" text-anchor="middle" font-size="10" fill="#4c1d95">在代价矩阵上搜出最优 Hamilton 环</text>
+    <text x="690" y="697" text-anchor="middle" font-size="10" fill="#4c1d95">搜出最优 Hamilton 环，生成双向 Ring 序列</text>
 
     <rect x="880" y="640" width="320" height="80" fill="#c4b5fd" rx="4"/>
-    <text x="1040" y="670" text-anchor="middle" font-size="13" font-weight="bold" fill="#4c1d95">ring 输出</text>
-    <text x="1040" y="697" text-anchor="middle" font-size="10" fill="#4c1d95">把双向 Ring 固化成 prev / next 序列</text>
+    <text x="1040" y="670" text-anchor="middle" font-size="13" font-weight="bold" fill="#4c1d95">transport 后端标签</text>
+    <text x="1040" y="697" text-anchor="middle" font-size="10" fill="#4c1d95">按 cost 给每条边贴 P2P / SHM 标签</text>
   </g>
 
   <!-- ===== L6: 装配编排层 (gray · 仅生命周期 + 进程间 + 容器) ===== -->
