@@ -33,6 +33,9 @@
     - [7.1 流程一：Communicator 初始化](#71-流程一communicator-初始化)
     - [7.2 流程二：AllReduce 热路径](#72-流程二allreduce-热路径)
     - [7.3 流程三：异常退出](#73-流程三异常退出)
+  - [8. 后续 TODO](#8-后续-todo)
+    - [8.1 单机内增强](#81-单机内增强)
+    - [8.2 跨节点 + 完整集合通信](#82-跨节点--完整集合通信)
   - [附录](#附录)
     - [公开 ABI](#公开-abi)
 
@@ -42,7 +45,7 @@
 
 ### 1.1 背景
 
-深度学习训练中，DDP 梯度同步是 GPU 间通信的最大消耗，而 AllReduce 是其核心原语：所有 rank 输入相同形状的张量，输出是各 rank 对应位置求和（或其它归约）的结果。
+深度学习训练中，数据/大模型参数同步是 GPU 间通信的最大消耗，而 AllReduce 是其核心原语：所有 rank 输入相同形状的张量，输出是各 rank 对应位置求和（或其它归约）的结果。
 
 当前目标是给出一个最小可用、行为完备的 AllReduce 实现：聚焦**单机多卡、采用 Ring 算法 + Simple 协议**这一组成熟搭配，覆盖从 API 入口到 GPU 内核的完整链路。
 
@@ -794,6 +797,29 @@ sequenceDiagram
   App->>Flag: commAbort → *abortFlag = 1
   Flag-->>Kern: kernel spin 看到 flag → return
 ```
+
+---
+
+## 8. 后续 TODO
+
+### 8.1 单机内增强
+
+| 项 | 描述 | 主要触及模块 | 优先级 |
+|---|---|---|---|
+| **group 语义操作** | 支持 `ncclGroupStart` / `ncclGroupEnd` 把多个集合通信原语聚合为一次入队、一次 kernel launch，减少调度开销，也避免多 comm 之间的死锁 | enqueue / device | P0 |
+| **stream 支持增强** | CUDA Graph capture（让整个 AllReduce 可被 capture 进图）、multi-stream 并发、stream priority 透传 | enqueue | P0 |
+| **tree 算法** | 实现 Tree AllReduce 用于**小消息低延迟**场景；enqueue 按消息大小档位在 Ring / Tree 间切换；落地在 graph 层（新增 tree builder）与 device 层（新增 kernel 模板） | graph（新增 tree builder）/ device / enqueue | P1 |
+| **LL / LL128 协议** | 低延迟传输协议，针对小消息优化（数据 + flag 同一 cache line）；与 Simple 协议并列，按消息大小切换 | transport / device | P2 |
+| **自动 nChannels 计算** | 装配期按拓扑 / 算法 / 消息特征自动选 nChannels，去掉当前的手动配置（见 §6.2.3 step 4 备注 1） | graph / enqueue | P2 |
+
+### 8.2 跨节点 + 完整集合通信
+
+| 项 | 描述 | 主要触及模块 | 优先级 |
+|---|---|---|---|
+| **RDMA 后端** | 支持跨节点通信（InfiniBand / RoCE）；transport 增加 NET 后端，与 P2P / SHM 三者并列；bootstrap 扩展 OOB 通道（TCP / IB CM）替代纯 UDS | transport（新增 NET）/ bootstrap | P1 |
+| **proxy 代理线程** | host 侧常驻代理线程，负责 RDMA 数据搬运调度 + 运行期 hang 检测；检测超时后写 `comm->fatalError`（呼应 §6.2.2 错误传播路径里"主要是 RDMA proxy 线程，当前版本暂未添加"） | comm / transport | P1 |
+| **其他集合通信** | broadcast / reduce / all-gather / reduce-scatter / all-to-all / gather / scatter；其中 reduce-scatter / all-gather 是 AllReduce 的两半，复用率最高 | device / enqueue / public-api | P2 |
+| **点对点通信** | `ncclSend` / `ncclRecv` 原语；不走 Ring 算法，直接走 transport 链路；用于流水并行 (pipeline parallelism) 等场景 | device / enqueue / public-api | P2 |
 
 ---
 
