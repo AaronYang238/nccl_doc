@@ -79,7 +79,7 @@
     <rect x="160" y="345" width="280" height="100" fill="#93c5fd" rx="4"/>
     <text x="300" y="385" text-anchor="middle" font-size="13" font-weight="bold" fill="#1e3a8a">allreduce_ring_simple.cu</text>
     <text x="300" y="410" text-anchor="middle" font-size="10" fill="#1e3a8a">Ring 算法 2N-1 步原语的 GPU 实现</text>
-    <text x="300" y="425" text-anchor="middle" font-size="10" fill="#1e3a8a">(op × dtype 共 ~68 实例)</text>
+    <text x="300" y="425" text-anchor="middle" font-size="10" fill="#1e3a8a">(op × dtype)</text>
 
     <rect x="455" y="345" width="220" height="100" fill="#93c5fd" rx="4"/>
     <text x="565" y="385" text-anchor="middle" font-size="13" font-weight="bold" fill="#1e3a8a">prims_simple.h</text>
@@ -89,12 +89,12 @@
     <rect x="690" y="345" width="220" height="100" fill="#93c5fd" rx="4"/>
     <text x="800" y="385" text-anchor="middle" font-size="13" font-weight="bold" fill="#1e3a8a">reduce_kernel.h</text>
     <text x="800" y="415" text-anchor="middle" font-size="10" fill="#1e3a8a">element-wise</text>
-    <text x="800" y="430" text-anchor="middle" font-size="10" fill="#1e3a8a">归约函子集合</text>
+    <text x="800" y="430" text-anchor="middle" font-size="10" fill="#1e3a8a">归约操作集合</text>
 
     <rect x="925" y="345" width="280" height="100" fill="#93c5fd" rx="4"/>
     <text x="1065" y="385" text-anchor="middle" font-size="13" font-weight="bold" fill="#1e3a8a">common_kernel.h</text>
     <text x="1065" y="415" text-anchor="middle" font-size="10" fill="#1e3a8a">GPU 通用工具：</text>
-    <text x="1065" y="430" text-anchor="middle" font-size="10" fill="#1e3a8a">向量化访存 + 内存屏障</text>
+    <text x="1065" y="430" text-anchor="middle" font-size="10" fill="#1e3a8a">内存屏障等</text>
   </g>
 
   <!-- ===== L4: 传输层 (含装配期入口 + 运行期主体) ===== -->

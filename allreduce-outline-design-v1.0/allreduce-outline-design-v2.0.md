@@ -34,7 +34,7 @@
     - [7.2 流程二：AllReduce 热路径](#72-流程二allreduce-热路径)
     - [7.3 流程三：异常退出](#73-流程三异常退出)
   - [8. 后续 TODO](#8-后续-todo)
-    - [8.1 单机内增强](#81-单机内增强)
+    - [8.1 单节点](#81-单节点)
     - [8.2 跨节点 + 完整集合通信](#82-跨节点--完整集合通信)
   - [附录](#附录)
     - [公开 ABI](#公开-abi)
@@ -206,7 +206,7 @@ flowchart LR
     R_KERN -. "spin 时检查" .-> R_ABORT
   end
 
-  INIT == "<b>commInit 产物</b><br/><b>CPU 侧</b>：档位表 + peerInfo[] + channels[*].peers[*] 后端标签<br/><br/><b>GPU 侧（HBM 内）</b>：Ring 序列（prev / next / userRanks）<br/>+ 远端 ringbuf 指针 + abortFlag 指针" ==> RUN
+  INIT == "<b>commInit 产物</b><br/><b>CPU 侧</b>：档位表 + Ring 序列（prev/next） + channels[].peers[] 后端标签<br/><br/><b>GPU 侧（HBM 内）</b>：远端 ringbuf 指针 + abortFlag 指针" ==> RUN
 
   classDef p_init fill:#faf5ff,stroke:#9333ea,stroke-width:2px;
   classDef p_run fill:#eff6ff,stroke:#2563eb,stroke-width:2px;
@@ -331,7 +331,7 @@ sequenceDiagram
     participant Ri as rank i<br/>(i = 1 ~ N-1)
     end
 
-    App0->>R0: ncclGetUniqueId(uid)
+    App0->>R0: getUniqueId(uid)
     R0-->>App0: 返回 uniqueID<br/>（含约定 UDSSocketPath）
     App0->>AppI: 带外分发 uniqueID
 
@@ -805,10 +805,11 @@ sequenceDiagram
 
 ## 8. 后续 TODO
 
-### 8.1 单机内增强
+### 8.1 单节点
 
 | 项 | 描述 | 主要触及模块 | 优先级 |
 |---|---|---|---|
+| **核函数内同步屏障** | 支持不同rank执行的核函数内同步会和 | device | P0 |
 | **group 语义操作** | 支持 `ncclGroupStart` / `ncclGroupEnd` 把多个集合通信原语聚合为一次入队、一次 kernel launch，减少调度开销，也避免多 comm 之间的死锁 | enqueue / device | P0 |
 | **stream 支持增强** | CUDA Graph capture（让整个 AllReduce 可被 capture 进图）、multi-stream 并发、stream priority 透传 | enqueue | P0 |
 | **tree 算法** | 实现 Tree AllReduce 用于**小消息低延迟**场景；enqueue 按消息大小档位在 Ring / Tree 间切换；落地在 graph 层（新增 tree builder）与 device 层（新增 kernel 模板） | graph（新增 tree builder）/ device / enqueue | P1 |
