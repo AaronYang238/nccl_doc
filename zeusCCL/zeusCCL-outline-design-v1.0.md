@@ -4,11 +4,11 @@
   - [1. 背景与目标](#1-背景与目标)
     - [1.1 背景](#11-背景)
     - [1.2 Tree AllReduce 工作原理](#12-tree-allreduce-工作原理)
-      - [1.2.1 直觉：N=7 的具体例子](#121-直觉n7-的具体例子)
-    - [1.3 Ring AllGather / ReduceScatter 工作原理](#13-ring-allgather--reducescatter-工作原理)
-      - [1.3.1 Ring ReduceScatter](#131-ring-reducescatter)
-      - [1.3.2 Ring AllGather](#132-ring-allgather)
-      - [1.3.3 与 AllReduce 的关系](#133-与-allreduce-的关系)
+      - [1.2.1 直觉：在 zccl_tree（16-rank）拓扑上的 AllReduce 数据流](#121-直觉在-zccl_tree16-rank拓扑上的-allreduce-数据流)
+    - [1.3 Tree ReduceScatter / AllGather 工作原理](#13-tree-reducescatter--allgather-工作原理)
+      - [1.3.1 Tree ReduceScatter](#131-tree-reducescatter)
+      - [1.3.2 Tree AllGather](#132-tree-allgather)
+      - [1.3.3 三个 Tree 原语的统一视角](#133-三个-tree-原语的统一视角)
     - [1.4 核心取舍：装配重 / 热路径轻](#14-核心取舍装配重--热路径轻)
   - [2. 术语对照](#2-术语对照)
     - [2.1 部署级](#21-部署级)
@@ -63,91 +63,162 @@
 
 ![典型硬件拓扑](../allreduce-outline-design/hardware%20topo.jpg)
 
+**本文档算法示例统一采用的 16-rank Tree 拓扑**——由硬件团队按机型生成、写入 XML 拓扑文件（参见 §6.2.3）。本节给出两种等价视角，后续 §1.2 / §1.3 的所有算法数据流均以此拓扑为例：
+
+> 图 1.1-2：**物理层级视图**（zccl_tree.jpg）——以根 R0 为中心向外辐射，边上数字 `1/2/3/4` 表示该边的层级 = 边两端 rank 到根的较大距离。这种画法贴近硬件实际"由 PBLink 主交换出发逐级扩展"的物理形态。
+
+![zccl_tree 物理视图](zccl_tree.jpg)
+
+> 图 1.1-3：**逻辑树视图**（zccl_tree1.jpg）——标准树形展开，R0 在顶端；最深路径 `R0 → R6 → R5 → R11 → {R8/R9/R10}` 深度为 4。
+
+![zccl_tree 逻辑视图](zccl_tree1.jpg)
+
+**Tree 结构概要**：
+
+| 节点 | 角色 | 邻居 |
+|---|---|---|
+| R0 | root（4 个 child） | children = {R6, R1, R2, R3} |
+| R6 | internal（3 child） | parent = R0；children = {R7, R4, R5} |
+| R5 | internal（1 child） | parent = R6；children = {R11} |
+| R11 | internal（3 child） | parent = R5；children = {R8, R9, R10} |
+| R3 | internal（1 child） | parent = R0；children = {R13} |
+| R13 | internal（3 child） | parent = R3；children = {R12, R14, R15} |
+| R1, R2, R4, R7, R8, R9, R10, R12, R14, R15 | leaf（10 个） | parent ∈ {R0, R6, R11, R13}；无 children |
+
+- **N = 16**，depth = 4
+- 集合通信总步数 = 2·depth = **8 步**（上行 4 + 下行 4）
+- 这是一棵**多叉非均衡树**（每内部节点 child 数 ∈ {1, 3, 4}），与教科书的完美二叉树不同——形状由硬件团队按 PBLink / PCIe 物理拓扑就近原则决定
+
 ### 1.2 Tree AllReduce 工作原理
 
 > Tree AllReduce = **Reduce 上行（叶→根，逐级累加）+ Broadcast 下行（根→叶，逐级分发）**。整个 communicator 共用一棵预定义的树，每个 rank 只有一个 parent 和最多两个 children。
 
-#### 1.2.1 直觉：N=7 的具体例子
+#### 1.2.1 直觉：在 zccl_tree（16-rank）拓扑上的 AllReduce 数据流
 
-设 7 个 rank 排成一棵以 rank 0 为根的二叉树（按 rank id 自然映射：rank i 的 parent = (i-1)/2，children = 2i+1, 2i+2）。
+设 16 个 rank 按 §1.1 图 1.1-2/1.1-3 给出的拓扑排列（R0 为 root，depth = 4）。
 
-- **初始**：每 rank 持有自己的本地张量 `Vi`（同形状）。
-- **目标**：最终所有 rank 都持有 `V = V0 + V1 + ... + V6`。
+- **初始**：每 rank 持有自己的本地张量 `Vi`（同形状），i = 0..15
+- **目标**：最终所有 rank 都持有 `V = V0 + V1 + ... + V15`
 
-![Tree AllReduce N=7](tree-allreduce-n7.svg)
+算法分两阶段，共 `2·depth = 8` 步：
 
-算法分两阶段，共 `2·depth` 轮（depth = ⌈log₂N⌉）：
+**Phase 1 — Reduce 上行**（4 步，叶 → 根，每节点收齐所有 child 后累加本地张量再上送 parent）：
 
-| 阶段 | 方向 | 每步动作 | 直觉 |
+| step | 同步触发的边（child → parent，所有边并行） | 步末数据汇总 |
+|---|---|---|
+| 1 | R8→R11，R9→R11，R10→R11 | R11 持有 V8+V9+V10+V11 |
+| 2 | R11→R5；R12→R13，R14→R13，R15→R13 | R5: V5+V8+V9+V10+V11；R13: V13+V12+V14+V15 |
+| 3 | R7→R6，R4→R6，R5→R6；R13→R3 | R6: 子树 8 节点全和（V6+V4+V7+V5+V8+V9+V10+V11）；R3: 子树 5 节点全和（V3+V13+V12+V14+V15） |
+| 4 | R6→R0，R1→R0，R2→R0，R3→R0 | **R0 持有完整全和 V** |
+
+**Phase 2 — Broadcast 下行**（4 步，根 → 叶，每节点写本地 recvbuff 后原样转发给所有 child）：
+
+| step | 同步触发的边（parent → child，所有边并行） | 步末数据到达 |
+|---|---|---|
+| 5 | R0 → R6, R1, R2, R3 | depth 1 全部持有 V |
+| 6 | R6 → R7, R4, R5；R3 → R13 | depth 2 全部持有 V |
+| 7 | R5 → R11；R13 → R12, R14, R15 | depth 3 全部持有 V |
+| 8 | R11 → R8, R9, R10 | depth 4（所有叶子）持有 V |
+
+**每节点 Reduce 阶段加法次数**（= child 数）：
+
+| 节点 | 角色 | 加法次数 | 说明 |
 |---|---|---|---|
-| Reduce（上行） | 叶 → 根 | 每非叶 rank 等所有 child 把数据送到自己 → **累加** 自己的本地值 → 转发给 parent | 自底向上把整棵树的元素逐级累加；根节点最终持有完整全和 |
-| Broadcast（下行） | 根 → 叶 | 根直接把全和写到 output；每非叶 rank 收到 parent 发来的全和 → 写 output → 转发给所有 child | 全和从根沿树枝逐级分发到所有 rank |
+| R1, R2, R4, R7, R8, R9, R10, R12, R14, R15 | 叶子 | 0 | 只发送本地 Vi，不收 child |
+| R5, R3 | 内部（瘸腿，1 child） | 1 | 收 1 个 child + 加自身 |
+| R11, R13 | 内部（3 child） | 3 | 收 3 个 child + 加自身 |
+| R6 | 内部（3 child） | 3 | 收 3 个 child + 加自身 |
+| **R0** | **根（4 child）** | **4** | 收 4 个 child + 加自身 |
 
-> 与 Ring 相比，Tree 的总步数是 `O(log N)` 而非 `O(N)`，**小消息延迟低**；代价是不同节点工作量不对称（根承担更多扇入扇出），中等及大消息的带宽利用率不如 Ring。本期聚焦延迟敏感场景。
+> **观察**：N=16 时 Ring AllReduce 需 2(N-1)=30 步；Tree 只需 2·depth=8 步——延迟降为 ~27%，对小消息收益显著。代价是不同节点工作量不对称（叶子 0 加法，根 4 加法），中等/大消息的带宽利用率不如 Ring。
 
-### 1.3 Ring AllGather / ReduceScatter 工作原理
+> **历史参考**：早期版本曾用完美二叉树 N=7 示意 Reduce/Broadcast 抽象逻辑，对应 [`tree-allreduce-n7.svg`](tree-allreduce-n7.svg)；本节起改用 zccl_tree 实际 16-rank 拓扑作为统一示例。
 
-> **AllReduce ≡ ReduceScatter + AllGather**。两者既是 AllReduce 的"两半"，本身也是常用的独立原语。
+### 1.3 Tree ReduceScatter / AllGather 工作原理
 
-#### 1.3.1 Ring ReduceScatter
+> 同一棵 zccl_tree（§1.1 图 1.1-2/1.1-3）也直接支撑 **ReduceScatter** 与 **AllGather** 两种原语。三种原语在 Tree 拓扑下共享相同的 "上行 4 步 + 下行 4 步" 框架，**差异只在每条边上传输什么内容**——这正是 zeusCCL 中三个 kernel 共用 `graphs[tree].channels[*]` 的根本原因。
 
-设 N=4 个 rank 排成环 `0 → 1 → 2 → 3 → 0`，每 rank 持有同形状的张量切成 4 块：
+> Ring 算法也可实现 ReduceScatter / AllGather（带宽更友好），见 §6.2.6 §B/§C；本节聚焦 Tree 视角的数据流。
 
-- **初始**：rank i 持有 `[Xi_0, Xi_1, Xi_2, Xi_3]`（4 段）
-- **目标**：rank i 最终只持有 `Si = X0_i + X1_i + X2_i + X3_i`（全和的第 i 段）；其它段废弃
+#### 1.3.1 Tree ReduceScatter
 
-![Ring ReduceScatter N=4](ring-reducescatter-n4.svg)
+每 rank 把本地张量切成 **16 块** `[Xi_0, Xi_1, ..., Xi_15]`（i = 0..15）。目标：rank i 最终**仅持有** `Si = X0_i + X1_i + ... + X15_i`（全和的第 i 段），其它段废弃。
 
-算法走 N−1 = 3 步，每步沿环单向传一段、收到后**累加**到本地对应段。逐步发送的 chunk 索引（与图中"新到段"对应）：
+**Phase 1 — Reduce 上行**（4 步，与 AllReduce Reduce 阶段完全一致）：所有 16 chunk 沿树逐级累加，R0 末步持有 `[S0, S1, ..., S15]`（16 个全和段）。
 
-| step | r0 发出 | r1 发出 | r2 发出 | r3 发出 |
-|---|---|---|---|---|
-| 1 | chunk 3 (X0₃) → r1 | chunk 0 (X1₀) → r2 | chunk 1 (X2₁) → r3 | chunk 2 (X3₂) → r0 |
-| 2 | chunk 2 (X3₂+X0₂) → r1 | chunk 3 (X0₃+X1₃) → r2 | chunk 0 (X1₀+X2₀) → r3 | chunk 1 (X2₁+X3₁) → r0 |
-| 3 | chunk 1 (X3₁+X2₁+X0₁) → r1 | chunk 2 (X0₂+X3₂+X1₂) → r2 | chunk 3 (X1₃+X0₃+X2₃) → r3 | chunk 0 (X2₀+X1₀+X3₀) → r0 |
+**Phase 2 — 选择性 Scatter 下行**（4 步，**每条下行边只携带目的子树需要的段**）：
 
-3 步后：rank r 在 chunk r 位置持有 `Sr = X0_r + X1_r + X2_r + X3_r`（图中对角线绿色单元格）。
+| step | 边 | 传输的段集合（仅子树所需）|
+|---|---|---|
+| 5 | R0 → R1 | `{S1}` |
+| 5 | R0 → R2 | `{S2}` |
+| 5 | R0 → R6 | `{S6, S7, S4, S5, S11, S8, S9, S10}`（R6 子树 8 段）|
+| 5 | R0 → R3 | `{S3, S13, S12, S14, S15}`（R3 子树 5 段）|
+| 6 | R6 → R7 | `{S7}`；R6 → R4: `{S4}` |
+| 6 | R6 → R5 | `{S5, S11, S8, S9, S10}`（R5 子树 5 段）|
+| 6 | R3 → R13 | `{S13, S12, S14, S15}` |
+| 7 | R5 → R11 | `{S11, S8, S9, S10}` |
+| 7 | R13 → R12, R14, R15 | `{S12}`, `{S14}`, `{S15}` |
+| 8 | R11 → R8, R9, R10 | `{S8}`, `{S9}`, `{S10}` |
 
-> 直觉：每段"绕环一圈"被所有 rank 累加一次；环的方向决定每段最终落在哪个 rank（本约定下 → rank r 持有 chunk r 的全和）。
+R0 自留 `S0`、R6 自留 `S6`、R5 自留 `S5`、R11 自留 `S11`、R3 自留 `S3`、R13 自留 `S13`——每个内部节点都拿走"属于自己"那一段。
 
-#### 1.3.2 Ring AllGather
+> **关键差异（vs AllReduce）**：上行阶段完全一致；下行阶段 AllReduce 在每条边都传**完整全和 V**，而 ReduceScatter 在每条边只传**目的子树需要的段集**。下行总传输量从 `N × sizeof(tensor)` 降到 `≈ sizeof(tensor)`（所有边的段集加起来约等于一份完整张量）——这是 ReduceScatter 带宽优于 AllReduce 的根因。
 
-设 N=4 个 rank 排成环 `0 → 1 → 2 → 3 → 0`，每 rank 持有 N 段 buffer，其中**只有自己负责的那一段已写入数据**，其它段为空：
+#### 1.3.2 Tree AllGather
 
-- **初始**：rank i 持有 `[_, _, ..., Di, ..., _]`（只有第 i 段是 Di）
-- **目标**：所有 rank 都持有 `[D0, D1, D2, D3]`
+每 rank 初始**仅持有自己的段** `Di`（其它 15 段位置为空）。目标：所有 rank 持有完整 `[D0, D1, ..., D15]`。
 
-![Ring AllGather N=4](ring-allgather-n4.svg)
+**Phase 1 — Gather 上行**（4 步，**每条上行边的段集向上累积**）：
 
-算法走 N−1 = 3 步，每步把"上一步刚收到的段"原样转发给 next、收到后**覆盖**写入本端对应槽位（k=0 时转发自己的 Dr）：
+| step | 边 | 传输的段集合（已累积）|
+|---|---|---|
+| 1 | R8 → R11 | `{D8}`；R9 → R11: `{D9}`；R10 → R11: `{D10}` |
+| 2 | R11 → R5 | `{D11, D8, D9, D10}`（R11 + 3 child）|
+| 2 | R12 → R13 | `{D12}`；R14 → R13: `{D14}`；R15 → R13: `{D15}` |
+| 3 | R7 → R6 | `{D7}`；R4 → R6: `{D4}` |
+| 3 | R5 → R6 | `{D5, D11, D8, D9, D10}`（R5 已从 R11 收 4 段）|
+| 3 | R13 → R3 | `{D13, D12, D14, D15}` |
+| 4 | R6 → R0 | `{D6, D7, D4, D5, D11, D8, D9, D10}`（R6 子树 8 段）|
+| 4 | R1 → R0, R2 → R0 | `{D1}`, `{D2}` |
+| 4 | R3 → R0 | `{D3, D13, D12, D14, D15}`（R3 子树 5 段）|
 
-| step | r0 发出 | r1 发出 | r2 发出 | r3 发出 |
-|---|---|---|---|---|
-| 1 | D₀ → r1 | D₁ → r2 | D₂ → r3 | D₃ → r0 |
-| 2 | D₃ → r1（上一步收到的）| D₀ → r2 | D₁ → r3 | D₂ → r0 |
-| 3 | D₂ → r1 | D₃ → r2 | D₀ → r3 | D₁ → r0 |
+R0 末步持有完整 `[D0, D1, ..., D15]`。
 
-3 步后：每 rank 都收齐其它 N−1 段，与自己原本的段拼出完整 `[D0, D1, D2, D3]`。
+**Phase 2 — Broadcast 下行**（4 步，**每条下行边都传完整 16 段**——AllGather 要求所有 rank 拿到全部数据）：
 
-> 直觉：每段沿环单向传一圈即"广播"给了所有其它 rank；与 ReduceScatter 的对偶在于"累加"换成"覆盖"。
+| step | 边 | 传输 |
+|---|---|---|
+| 5 | R0 → R6, R1, R2, R3 | 完整 `[D0..D15]` |
+| 6 | R6 → R7, R4, R5；R3 → R13 | 完整 `[D0..D15]` |
+| 7 | R5 → R11；R13 → R12, R14, R15 | 完整 `[D0..D15]` |
+| 8 | R11 → R8, R9, R10 | 完整 `[D0..D15]` |
 
-#### 1.3.3 与 AllReduce 的关系
+> **关键差异（vs AllReduce）**：上行阶段 AllReduce 在每条边都传**完整张量**（做加法），而 AllGather 只传**已收集到的段集**（数据量从叶子到根逐级累积，叶子上行 1 段、根上行 N 段）；下行阶段两者一致，都传完整结果到所有 rank。
 
-> 图 1.3.3-1：Ring AllReduce ≡ ReduceScatter + AllGather。三个 4×4 状态网格依次为 ① 初始（每 rank 全 4 段独立）→ ② RS 后（每 rank 1 段全和，对角线绿色）→ ③ AG 后（每 rank 全部 4 段全和，全黄）。底部 3 块色卡说明 zeusCCL 中三种 kernel（RS / AG / AllReduce）的原语序列与共享 `graphs[ring].channels[*]` 的关系。
+#### 1.3.3 三个 Tree 原语的统一视角
 
-![AllReduce = ReduceScatter + AllGather](allreduce-decomposition.svg)
+三个原语共用 zccl_tree 的同一棵树 + 同一份 prims_simple 协议，**差异只在每条边上传输什么内容**：
+
+| 原语 | 上行阶段（叶 → 根） | 下行阶段（根 → 叶） | 每条边的下行传输量 |
+|---|---|---|---|
+| **AllReduce** | Reduce：每条边传**全量**（做元素加法），R0 末持全和 V | Broadcast：每条边传**完整 V** | `sizeof(tensor)`（每条边）|
+| **ReduceScatter** | 同上 Reduce（按 chunk 累加），R0 末持 [S0..S15] | Scatter：每条边只传**目的子树的段集** | 子树规模 × `sizeof(chunk)` |
+| **AllGather** | Gather：每条边传**已收集的段集**（向上累积，叶子 1 段、根 N 段）| 同上 Broadcast（传完整 [D0..D15]）| `sizeof(tensor)`（每条边）|
+
+**等价关系**（数据流层面）：
 
 ```
-Ring AllReduce
-   = Ring ReduceScatter         ── N−1 步，每 rank 持有全和的某一段
-   + Ring AllGather             ── N−1 步，把那一段广播给所有 rank
-   总步数 = 2(N−1)
+Tree AllReduce      ≈  Tree Reduce(↑全量加和)    +  Tree Broadcast(↓全量复制)
+Tree ReduceScatter  ≈  Tree Reduce(↑分 chunk 加和) +  Tree Scatter(↓按子树分发)
+Tree AllGather      ≈  Tree Gather(↑段集累积)    +  Tree Broadcast(↓全量复制)
 ```
 
 zeusCCL 中：
-- **AllGather / ReduceScatter 各有独立 kernel**，由 enqueue 按 collOp 选中后单独 launch（不必先跑完整 AllReduce）。
-- **Ring AllReduce kernel 在结构上就是"ReduceScatter 末步 + AllGather 首步"被合并的一次原语调用**——这正是 §6.2.6 中 `recvReduceCopySend` 的语义。
-- 三个原语**共用同一份 `comm->graphs[algo].channels[*]`**（同样的 prev/next 邻居、同样的 ringbuf），运行期由 dispatch 表分别路由到各自 kernel。
+- **三个原语各有独立 kernel**（详见 §6.2.6），由 enqueue 按 collOp 选中后单独 launch
+- **共用同一份 `comm->graphs[tree].channels[*]`**——同样的 parent/children 邻居、同样的 ringbuf（每 `(algo, channel, peer)` 三元组各一份）
+- 上行阶段 AllReduce 与 ReduceScatter 共享相同实现（都是"全量 Reduce up"，差异只在是否分 chunk）；下行阶段 AllReduce 与 AllGather 共享相同实现（都是"全量 Broadcast down"）
+- 对**带宽敏感**的大消息，ReduceScatter / AllGather 也可换 Ring 算法实现（每条边均匀分担数据，根不再是瓶颈）——详见 §6.2.6 §B/§C；dispatch 表按消息大小在 Tree / Ring 间切换
 
 ### 1.4 核心取舍：装配重 / 热路径轻
 
