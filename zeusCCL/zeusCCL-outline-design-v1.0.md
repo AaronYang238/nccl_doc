@@ -245,7 +245,7 @@ GPU kernel 启动后**自主在 device 上推进**，host 与其它 rank 之间�
 
 | 部署形态 | 描述 | 通信通路 |
 |---|---|---|
-| **单进程多 GPU** | 一个进程的N个线程持有 N 个 GPU、N 个 communicator | 直接 CUDA IPC + PBLink；同进程的地址空间内 handle 可直接共享，**绕过 UDS 同步握手** |
+| **单进程多 GPU** | 一个进程的N个线程，每个线程持有一个 GPU、 一个 communicator | 直接 CUDA IPC + PBLink；同进程的地址空间内 handle 可直接共享，**绕过 UDS 同步握手** |
 | **多进程多 GPU**（同节点）| 每进程一个 GPU、一个 communicator | 通过 **UDS 同步握手** 交换 `peerInfo`（busId + pid + IPC handle），再走 CUDA IPC + PBLink |
 
 所有 rank **几乎同时** 调用 `ncclCommInit`；某个 rank 迟到会让其他 rank 阻塞在同步握手上。
@@ -496,7 +496,7 @@ rank i (i ≥ 1):
 
 #### 6.2.3 graph 模块
 
-**模块作用**：每种算法（Tree、Ring、……）需要本 rank 知道自己在该算法拓扑下的邻居（Tree 的 parent/children、Ring 的 prev/next），并给每条邻居边选定合适的 transport 后端。**所有算法的拓扑结构都由硬件团队按机型预先生成、以一组 XML 文件形式随库交付**（每份 XML 对应一种 algo）；graph 模块的工作不再是"搜索拓扑"，而是"把所有可用 XML 一份一份正确加载进来、对齐到本次启动的 rank 集合"。这把"拓扑设计"从运行时迁移到了离线，运行时只剩查表 + 翻译。
+**模块作用**：每种算法（Tree、Ring、……）需要本 rank 知道自己在该算法拓扑下的邻居（Tree 的 parent/children、Ring 的 prev/next），并给每条邻居边选定合适的 transport 后端。**所有算法的拓扑结构预先生成、以一组 XML 文件形式随库提供 **（每份 XML 对应一种 algo）；graph 模块的工作不再是"搜索拓扑"，而是"把所有可用 XML 一份一份正确加载进来、对齐到本次启动的 rank 集合"。这把"拓扑设计"从运行时迁移到了离线，运行时只剩查表 + 翻译。
 
 **模块定位**：graph 在装配期完成四件事——
 1. **多 XML 扫描**：库内可携带多份 XML（不同 algo × 不同机型 × 不同规模），按 `(algo, nranks, BDF 集合)` 给每种 algo 选匹配项。
