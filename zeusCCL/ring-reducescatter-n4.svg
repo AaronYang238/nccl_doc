@@ -1,0 +1,250 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 720" font-family="Segoe UI, Arial, sans-serif">
+  <defs>
+    <marker id="rsArr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#7c3aed"/>
+    </marker>
+  </defs>
+
+  <!-- Title -->
+  <text x="550" y="28" text-anchor="middle" font-size="22" font-weight="bold" fill="#0f172a">Ring ReduceScatter — N = 4</text>
+  <text x="550" y="50" text-anchor="middle" font-size="12" fill="#475569">沿环单向传 N−1 = 3 步；每段绕环一圈被所有 rank 累加；最终 rank r 持有第 r 段的全和 S<tspan baseline-shift="sub" font-size="0.7em">r</tspan></text>
+
+  <!-- ============================================================ -->
+  <!-- Ring topology (top center) -->
+  <!-- ============================================================ -->
+  <g transform="translate(380, 75)">
+    <text x="170" y="0" text-anchor="middle" font-size="13" font-weight="bold" fill="#7c3aed">环拓扑（顺时针）</text>
+    <circle cx="80" cy="80" r="26" fill="#ede9fe" stroke="#7c3aed" stroke-width="2"/>
+    <text x="80" y="84" text-anchor="middle" font-size="13" font-weight="bold">r0</text>
+    <circle cx="260" cy="80" r="26" fill="#ede9fe" stroke="#7c3aed" stroke-width="2"/>
+    <text x="260" y="84" text-anchor="middle" font-size="13" font-weight="bold">r1</text>
+    <circle cx="260" cy="180" r="26" fill="#ede9fe" stroke="#7c3aed" stroke-width="2"/>
+    <text x="260" y="184" text-anchor="middle" font-size="13" font-weight="bold">r2</text>
+    <circle cx="80" cy="180" r="26" fill="#ede9fe" stroke="#7c3aed" stroke-width="2"/>
+    <text x="80" y="184" text-anchor="middle" font-size="13" font-weight="bold">r3</text>
+    <!-- Arrows clockwise -->
+    <path d="M 108 80 L 232 80" stroke="#7c3aed" stroke-width="2" marker-end="url(#rsArr)" fill="none"/>
+    <path d="M 260 108 L 260 152" stroke="#7c3aed" stroke-width="2" marker-end="url(#rsArr)" fill="none"/>
+    <path d="M 232 180 L 108 180" stroke="#7c3aed" stroke-width="2" marker-end="url(#rsArr)" fill="none"/>
+    <path d="M 80 152 L 80 108" stroke="#7c3aed" stroke-width="2" marker-end="url(#rsArr)" fill="none"/>
+  </g>
+
+  <!-- ============================================================ -->
+  <!-- 4 State Grids -->
+  <!-- ============================================================ -->
+  <!-- Each grid is 200w x 160h; 4 grids side by side with gap 20 -->
+
+  <!-- Common: column header (chunk 0 1 2 3) and row labels (r0..r3) -->
+  <!-- Cell size: 45 x 28 -->
+
+  <g transform="translate(30, 310)">
+    <!-- ===== Grid 1: Initial ===== -->
+    <g transform="translate(0, 0)">
+      <text x="115" y="0" text-anchor="middle" font-size="13" font-weight="bold" fill="#0f172a">初始</text>
+      <text x="115" y="16" text-anchor="middle" font-size="10" fill="#64748b">每 rank 持有 4 段</text>
+
+      <!-- column header -->
+      <g font-size="9" fill="#475569" text-anchor="middle">
+        <text x="40" y="40">chunk 0</text>
+        <text x="85" y="40">chunk 1</text>
+        <text x="130" y="40">chunk 2</text>
+        <text x="175" y="40">chunk 3</text>
+      </g>
+
+      <!-- row labels -->
+      <g font-size="10" font-weight="bold" fill="#1e293b" text-anchor="end">
+        <text x="14" y="64">r0</text>
+        <text x="14" y="92">r1</text>
+        <text x="14" y="120">r2</text>
+        <text x="14" y="148">r3</text>
+      </g>
+
+      <!-- Cells (all white = initial single-term) -->
+      <g font-size="9" text-anchor="middle">
+        <!-- row r0 -->
+        <rect x="18" y="50" width="45" height="22" fill="#f1f5f9" stroke="#cbd5e1"/><text x="40" y="65">X0₀</text>
+        <rect x="63" y="50" width="45" height="22" fill="#f1f5f9" stroke="#cbd5e1"/><text x="85" y="65">X0₁</text>
+        <rect x="108" y="50" width="45" height="22" fill="#f1f5f9" stroke="#cbd5e1"/><text x="130" y="65">X0₂</text>
+        <rect x="153" y="50" width="45" height="22" fill="#f1f5f9" stroke="#cbd5e1"/><text x="175" y="65">X0₃</text>
+        <!-- row r1 -->
+        <rect x="18" y="78" width="45" height="22" fill="#f1f5f9" stroke="#cbd5e1"/><text x="40" y="93">X1₀</text>
+        <rect x="63" y="78" width="45" height="22" fill="#f1f5f9" stroke="#cbd5e1"/><text x="85" y="93">X1₁</text>
+        <rect x="108" y="78" width="45" height="22" fill="#f1f5f9" stroke="#cbd5e1"/><text x="130" y="93">X1₂</text>
+        <rect x="153" y="78" width="45" height="22" fill="#f1f5f9" stroke="#cbd5e1"/><text x="175" y="93">X1₃</text>
+        <!-- row r2 -->
+        <rect x="18" y="106" width="45" height="22" fill="#f1f5f9" stroke="#cbd5e1"/><text x="40" y="121">X2₀</text>
+        <rect x="63" y="106" width="45" height="22" fill="#f1f5f9" stroke="#cbd5e1"/><text x="85" y="121">X2₁</text>
+        <rect x="108" y="106" width="45" height="22" fill="#f1f5f9" stroke="#cbd5e1"/><text x="130" y="121">X2₂</text>
+        <rect x="153" y="106" width="45" height="22" fill="#f1f5f9" stroke="#cbd5e1"/><text x="175" y="121">X2₃</text>
+        <!-- row r3 -->
+        <rect x="18" y="134" width="45" height="22" fill="#f1f5f9" stroke="#cbd5e1"/><text x="40" y="149">X3₀</text>
+        <rect x="63" y="134" width="45" height="22" fill="#f1f5f9" stroke="#cbd5e1"/><text x="85" y="149">X3₁</text>
+        <rect x="108" y="134" width="45" height="22" fill="#f1f5f9" stroke="#cbd5e1"/><text x="130" y="149">X3₂</text>
+        <rect x="153" y="134" width="45" height="22" fill="#f1f5f9" stroke="#cbd5e1"/><text x="175" y="149">X3₃</text>
+      </g>
+      <!-- Note -->
+      <text x="115" y="175" text-anchor="middle" font-size="10" fill="#64748b" font-style="italic">每段 1 个 term</text>
+    </g>
+
+    <!-- ===== Grid 2: After Step 1 ===== -->
+    <g transform="translate(265, 0)">
+      <text x="115" y="0" text-anchor="middle" font-size="13" font-weight="bold" fill="#0f172a">After step 1</text>
+      <text x="115" y="16" text-anchor="middle" font-size="10" fill="#64748b">每 rank 发 chunk (r−1)</text>
+
+      <g font-size="9" fill="#475569" text-anchor="middle">
+        <text x="40" y="40">chunk 0</text>
+        <text x="85" y="40">chunk 1</text>
+        <text x="130" y="40">chunk 2</text>
+        <text x="175" y="40">chunk 3</text>
+      </g>
+      <g font-size="10" font-weight="bold" fill="#1e293b" text-anchor="end">
+        <text x="14" y="64">r0</text>
+        <text x="14" y="92">r1</text>
+        <text x="14" y="120">r2</text>
+        <text x="14" y="148">r3</text>
+      </g>
+      <g font-size="9" text-anchor="middle">
+        <!-- r0: chunk 2 got +X3₂ (from r3) -->
+        <rect x="18" y="50" width="45" height="22" fill="#f1f5f9" stroke="#cbd5e1"/><text x="40" y="65">X0₀</text>
+        <rect x="63" y="50" width="45" height="22" fill="#f1f5f9" stroke="#cbd5e1"/><text x="85" y="65">X0₁</text>
+        <rect x="108" y="50" width="45" height="22" fill="#bfdbfe" stroke="#2563eb"/><text x="130" y="65" font-weight="bold">+X3₂</text>
+        <rect x="153" y="50" width="45" height="22" fill="#f1f5f9" stroke="#cbd5e1"/><text x="175" y="65">X0₃</text>
+        <!-- r1: chunk 3 got +X0₃ -->
+        <rect x="18" y="78" width="45" height="22" fill="#f1f5f9" stroke="#cbd5e1"/><text x="40" y="93">X1₀</text>
+        <rect x="63" y="78" width="45" height="22" fill="#f1f5f9" stroke="#cbd5e1"/><text x="85" y="93">X1₁</text>
+        <rect x="108" y="78" width="45" height="22" fill="#f1f5f9" stroke="#cbd5e1"/><text x="130" y="93">X1₂</text>
+        <rect x="153" y="78" width="45" height="22" fill="#bfdbfe" stroke="#2563eb"/><text x="175" y="93" font-weight="bold">+X0₃</text>
+        <!-- r2: chunk 0 got +X1₀ -->
+        <rect x="18" y="106" width="45" height="22" fill="#bfdbfe" stroke="#2563eb"/><text x="40" y="121" font-weight="bold">+X1₀</text>
+        <rect x="63" y="106" width="45" height="22" fill="#f1f5f9" stroke="#cbd5e1"/><text x="85" y="121">X2₁</text>
+        <rect x="108" y="106" width="45" height="22" fill="#f1f5f9" stroke="#cbd5e1"/><text x="130" y="121">X2₂</text>
+        <rect x="153" y="106" width="45" height="22" fill="#f1f5f9" stroke="#cbd5e1"/><text x="175" y="121">X2₃</text>
+        <!-- r3: chunk 1 got +X2₁ -->
+        <rect x="18" y="134" width="45" height="22" fill="#f1f5f9" stroke="#cbd5e1"/><text x="40" y="149">X3₀</text>
+        <rect x="63" y="134" width="45" height="22" fill="#bfdbfe" stroke="#2563eb"/><text x="85" y="149" font-weight="bold">+X2₁</text>
+        <rect x="108" y="134" width="45" height="22" fill="#f1f5f9" stroke="#cbd5e1"/><text x="130" y="149">X3₂</text>
+        <rect x="153" y="134" width="45" height="22" fill="#f1f5f9" stroke="#cbd5e1"/><text x="175" y="149">X3₃</text>
+      </g>
+      <text x="115" y="175" text-anchor="middle" font-size="10" fill="#2563eb" font-style="italic">部分和：每段 2 个 term</text>
+    </g>
+
+    <!-- ===== Grid 3: After Step 2 ===== -->
+    <g transform="translate(530, 0)">
+      <text x="115" y="0" text-anchor="middle" font-size="13" font-weight="bold" fill="#0f172a">After step 2</text>
+      <text x="115" y="16" text-anchor="middle" font-size="10" fill="#64748b">转发"上一步的累加器"</text>
+
+      <g font-size="9" fill="#475569" text-anchor="middle">
+        <text x="40" y="40">chunk 0</text>
+        <text x="85" y="40">chunk 1</text>
+        <text x="130" y="40">chunk 2</text>
+        <text x="175" y="40">chunk 3</text>
+      </g>
+      <g font-size="10" font-weight="bold" fill="#1e293b" text-anchor="end">
+        <text x="14" y="64">r0</text>
+        <text x="14" y="92">r1</text>
+        <text x="14" y="120">r2</text>
+        <text x="14" y="148">r3</text>
+      </g>
+      <g font-size="8" text-anchor="middle">
+        <!-- r0: chunk 1 = X0₁ + (X3₁+X2₁) -->
+        <rect x="18" y="50" width="45" height="22" fill="#f1f5f9" stroke="#cbd5e1"/><text x="40" y="65">X0₀</text>
+        <rect x="63" y="50" width="45" height="22" fill="#7dd3fc" stroke="#0284c7"/><text x="85" y="65" font-weight="bold">+(X3₁+X2₁)</text>
+        <rect x="108" y="50" width="45" height="22" fill="#bfdbfe" stroke="#2563eb"/><text x="130" y="65">X0₂+X3₂</text>
+        <rect x="153" y="50" width="45" height="22" fill="#f1f5f9" stroke="#cbd5e1"/><text x="175" y="65">X0₃</text>
+        <!-- r1: chunk 2 = X1₂ + (X0₂+X3₂) -->
+        <rect x="18" y="78" width="45" height="22" fill="#f1f5f9" stroke="#cbd5e1"/><text x="40" y="93">X1₀</text>
+        <rect x="63" y="78" width="45" height="22" fill="#f1f5f9" stroke="#cbd5e1"/><text x="85" y="93">X1₁</text>
+        <rect x="108" y="78" width="45" height="22" fill="#7dd3fc" stroke="#0284c7"/><text x="130" y="93" font-weight="bold">+(X0₂+X3₂)</text>
+        <rect x="153" y="78" width="45" height="22" fill="#bfdbfe" stroke="#2563eb"/><text x="175" y="93">X1₃+X0₃</text>
+        <!-- r2: chunk 3 = X2₃ + (X1₃+X0₃) -->
+        <rect x="18" y="106" width="45" height="22" fill="#bfdbfe" stroke="#2563eb"/><text x="40" y="121">X2₀+X1₀</text>
+        <rect x="63" y="106" width="45" height="22" fill="#f1f5f9" stroke="#cbd5e1"/><text x="85" y="121">X2₁</text>
+        <rect x="108" y="106" width="45" height="22" fill="#f1f5f9" stroke="#cbd5e1"/><text x="130" y="121">X2₂</text>
+        <rect x="153" y="106" width="45" height="22" fill="#7dd3fc" stroke="#0284c7"/><text x="175" y="121" font-weight="bold">+(X1₃+X0₃)</text>
+        <!-- r3: chunk 0 = X3₀ + (X2₀+X1₀) -->
+        <rect x="18" y="134" width="45" height="22" fill="#7dd3fc" stroke="#0284c7"/><text x="40" y="149" font-weight="bold">+(X2₀+X1₀)</text>
+        <rect x="63" y="134" width="45" height="22" fill="#bfdbfe" stroke="#2563eb"/><text x="85" y="149">X3₁+X2₁</text>
+        <rect x="108" y="134" width="45" height="22" fill="#f1f5f9" stroke="#cbd5e1"/><text x="130" y="149">X3₂</text>
+        <rect x="153" y="134" width="45" height="22" fill="#f1f5f9" stroke="#cbd5e1"/><text x="175" y="149">X3₃</text>
+      </g>
+      <text x="115" y="175" text-anchor="middle" font-size="10" fill="#0284c7" font-style="italic">每段 3 个 term</text>
+    </g>
+
+    <!-- ===== Grid 4: After Step 3 (final) ===== -->
+    <g transform="translate(795, 0)">
+      <text x="115" y="0" text-anchor="middle" font-size="13" font-weight="bold" fill="#059669">After step 3 (终)</text>
+      <text x="115" y="16" text-anchor="middle" font-size="10" fill="#64748b">对角线为全和 S<tspan baseline-shift="sub" font-size="0.7em">r</tspan></text>
+
+      <g font-size="9" fill="#475569" text-anchor="middle">
+        <text x="40" y="40">chunk 0</text>
+        <text x="85" y="40">chunk 1</text>
+        <text x="130" y="40">chunk 2</text>
+        <text x="175" y="40">chunk 3</text>
+      </g>
+      <g font-size="10" font-weight="bold" fill="#1e293b" text-anchor="end">
+        <text x="14" y="64">r0</text>
+        <text x="14" y="92">r1</text>
+        <text x="14" y="120">r2</text>
+        <text x="14" y="148">r3</text>
+      </g>
+      <g font-size="10" text-anchor="middle">
+        <!-- diagonal = full sum (green) -->
+        <rect x="18" y="50" width="45" height="22" fill="#bbf7d0" stroke="#059669" stroke-width="2"/><text x="40" y="65" font-weight="bold" fill="#065f46">S₀</text>
+        <rect x="63" y="50" width="45" height="22" fill="#f1f5f9" stroke="#cbd5e1"/><text x="85" y="65" font-size="8">X0₁ (废)</text>
+        <rect x="108" y="50" width="45" height="22" fill="#f1f5f9" stroke="#cbd5e1"/><text x="130" y="65" font-size="8">X0₂ (废)</text>
+        <rect x="153" y="50" width="45" height="22" fill="#f1f5f9" stroke="#cbd5e1"/><text x="175" y="65" font-size="8">X0₃ (废)</text>
+
+        <rect x="18" y="78" width="45" height="22" fill="#f1f5f9" stroke="#cbd5e1"/><text x="40" y="93" font-size="8">X1₀ (废)</text>
+        <rect x="63" y="78" width="45" height="22" fill="#bbf7d0" stroke="#059669" stroke-width="2"/><text x="85" y="93" font-weight="bold" fill="#065f46">S₁</text>
+        <rect x="108" y="78" width="45" height="22" fill="#f1f5f9" stroke="#cbd5e1"/><text x="130" y="93" font-size="8">X1₂ (废)</text>
+        <rect x="153" y="78" width="45" height="22" fill="#f1f5f9" stroke="#cbd5e1"/><text x="175" y="93" font-size="8">X1₃ (废)</text>
+
+        <rect x="18" y="106" width="45" height="22" fill="#f1f5f9" stroke="#cbd5e1"/><text x="40" y="121" font-size="8">X2₀ (废)</text>
+        <rect x="63" y="106" width="45" height="22" fill="#f1f5f9" stroke="#cbd5e1"/><text x="85" y="121" font-size="8">X2₁ (废)</text>
+        <rect x="108" y="106" width="45" height="22" fill="#bbf7d0" stroke="#059669" stroke-width="2"/><text x="130" y="121" font-weight="bold" fill="#065f46">S₂</text>
+        <rect x="153" y="106" width="45" height="22" fill="#f1f5f9" stroke="#cbd5e1"/><text x="175" y="121" font-size="8">X2₃ (废)</text>
+
+        <rect x="18" y="134" width="45" height="22" fill="#f1f5f9" stroke="#cbd5e1"/><text x="40" y="149" font-size="8">X3₀ (废)</text>
+        <rect x="63" y="134" width="45" height="22" fill="#f1f5f9" stroke="#cbd5e1"/><text x="85" y="149" font-size="8">X3₁ (废)</text>
+        <rect x="108" y="134" width="45" height="22" fill="#f1f5f9" stroke="#cbd5e1"/><text x="130" y="149" font-size="8">X3₂ (废)</text>
+        <rect x="153" y="134" width="45" height="22" fill="#bbf7d0" stroke="#059669" stroke-width="2"/><text x="175" y="149" font-weight="bold" fill="#065f46">S₃</text>
+      </g>
+      <text x="115" y="175" text-anchor="middle" font-size="10" fill="#059669" font-style="italic" font-weight="bold">每 rank 持有 1 段全和</text>
+    </g>
+  </g>
+
+  <!-- ============================================================ -->
+  <!-- Legend -->
+  <!-- ============================================================ -->
+  <g transform="translate(50, 550)">
+    <text x="0" y="0" font-size="13" font-weight="bold" fill="#0f172a">图例：</text>
+    <rect x="60" y="-12" width="20" height="14" fill="#f1f5f9" stroke="#cbd5e1"/>
+    <text x="85" y="0" font-size="11" fill="#475569">初始单 term Xi₍j₎</text>
+
+    <rect x="200" y="-12" width="20" height="14" fill="#bfdbfe" stroke="#2563eb"/>
+    <text x="225" y="0" font-size="11" fill="#475569">2 个 term 累加</text>
+
+    <rect x="335" y="-12" width="20" height="14" fill="#7dd3fc" stroke="#0284c7"/>
+    <text x="360" y="0" font-size="11" fill="#475569">3 个 term 累加</text>
+
+    <rect x="470" y="-12" width="20" height="14" fill="#bbf7d0" stroke="#059669" stroke-width="2"/>
+    <text x="495" y="0" font-size="11" fill="#475569">S<tspan baseline-shift="sub" font-size="0.7em">r</tspan> = 全和（4 个 term）</text>
+
+    <rect x="660" y="-12" width="20" height="14" fill="#f1f5f9" stroke="#cbd5e1"/>
+    <text x="685" y="0" font-size="11" fill="#475569">（废）= 残余未用数据</text>
+  </g>
+
+  <!-- Bottom caption -->
+  <g transform="translate(50, 610)">
+    <text x="0" y="0" font-size="12" fill="#334155">
+      <tspan font-weight="bold">算法约定：</tspan> step k 时 rank r 沿环发送 chunk <tspan font-style="italic">(r − 1 − k + N) mod N</tspan>；接收方累加到本端同位置。N−1 步后对角线 S<tspan baseline-shift="sub" font-size="0.7em">r</tspan> 即为全和。
+    </text>
+    <text x="0" y="22" font-size="12" fill="#334155">
+      <tspan font-weight="bold">直觉：</tspan> 每段沿环绕一圈 → 累加路径 = r → r+1 → r+2 → r+3 → r，到达"目的地 rank r"时已收齐所有 N 个 rank 的贡献。
+    </text>
+    <text x="0" y="44" font-size="12" fill="#334155">
+      <tspan font-weight="bold">通信量：</tspan> 每条边每步搬运 1 段 = (count/N)；与 Tree 不同，每 rank 工作量完全对称。
+    </text>
+  </g>
+</svg>

@@ -1,0 +1,135 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 720" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', Arial, sans-serif">
+  <rect width="1200" height="720" fill="#fafafa"/>
+
+  <defs>
+    <marker id="gArr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#0f172a"/>
+    </marker>
+    <marker id="gArrRed" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#dc2626"/>
+    </marker>
+  </defs>
+
+  <text x="600" y="32" text-anchor="middle" font-size="20" font-weight="bold" fill="#0f172a">Group 语义 — 延迟提交 + 按 (kernel, stream) 分桶 launch</text>
+  <text x="600" y="52" text-anchor="middle" font-size="12" fill="#475569">N 次 cudaLaunchKernel（每次 ~5μs）→ K 次 launch（K ≪ N，同型 batch 时 K=1）；并把多 comm 的执行顺序全局固化避免死锁</text>
+
+  <!-- ============ LEFT: 不开 group (baseline) ============ -->
+  <g transform="translate(40, 90)">
+    <rect x="0" y="0" width="520" height="600" fill="#fef2f2" stroke="#dc2626" stroke-width="1.5" rx="6"/>
+    <text x="260" y="26" text-anchor="middle" font-size="14" font-weight="bold" fill="#991b1b">① 不开 group — N 次 launch（baseline）</text>
+    <text x="260" y="46" text-anchor="middle" font-size="10" fill="#7f1d1d" font-style="italic">每次集合通信调用 = 1 次 cudaLaunchKernel</text>
+
+    <!-- timeline -->
+    <line x1="30" y1="80" x2="30" y2="565" stroke="#94a3b8" stroke-width="2"/>
+    <text x="20" y="76" text-anchor="end" font-size="10" fill="#475569">time</text>
+    <polygon points="30,575 25,565 35,565" fill="#94a3b8"/>
+
+    <!-- App call 1: AllReduce -->
+    <rect x="50" y="80" width="450" height="55" fill="#fecaca" stroke="#dc2626" stroke-width="1.5" rx="4"/>
+    <text x="60" y="100" font-size="11" font-weight="bold" fill="#7f1d1d">App: ncclAllReduce(grad₁, ...)</text>
+    <text x="60" y="118" font-size="10" fill="#7f1d1d">→ enqueue: 查 dispatch → 填 WorkElem → cudaLaunchKernel</text>
+    <text x="60" y="131" font-size="9" fill="#dc2626" font-style="italic">~5μs launch 开销 + kernel exec</text>
+
+    <!-- App call 2 -->
+    <rect x="50" y="150" width="450" height="55" fill="#fecaca" stroke="#dc2626" stroke-width="1.5" rx="4"/>
+    <text x="60" y="170" font-size="11" font-weight="bold" fill="#7f1d1d">App: ncclAllReduce(grad₂, ...)</text>
+    <text x="60" y="188" font-size="10" fill="#7f1d1d">→ enqueue: 查 dispatch → 填 WorkElem → cudaLaunchKernel</text>
+    <text x="60" y="201" font-size="9" fill="#dc2626" font-style="italic">~5μs launch 开销 + kernel exec</text>
+
+    <!-- App call 3 -->
+    <rect x="50" y="220" width="450" height="55" fill="#fecaca" stroke="#dc2626" stroke-width="1.5" rx="4"/>
+    <text x="60" y="240" font-size="11" font-weight="bold" fill="#7f1d1d">App: ncclAllReduce(grad₃, ...)</text>
+    <text x="60" y="258" font-size="10" fill="#7f1d1d">→ enqueue: 查 dispatch → 填 WorkElem → cudaLaunchKernel</text>
+    <text x="60" y="271" font-size="9" fill="#dc2626" font-style="italic">~5μs launch 开销 + kernel exec</text>
+
+    <text x="260" y="305" text-anchor="middle" font-size="14" fill="#7f1d1d">⋮</text>
+
+    <!-- App call N -->
+    <rect x="50" y="320" width="450" height="55" fill="#fecaca" stroke="#dc2626" stroke-width="1.5" rx="4"/>
+    <text x="60" y="340" font-size="11" font-weight="bold" fill="#7f1d1d">App: ncclAllReduce(gradₙ, ...)</text>
+    <text x="60" y="358" font-size="10" fill="#7f1d1d">→ enqueue → cudaLaunchKernel</text>
+    <text x="60" y="371" font-size="9" fill="#dc2626" font-style="italic">~5μs launch 开销 + kernel exec</text>
+
+    <!-- Cost summary -->
+    <rect x="50" y="410" width="450" height="80" fill="#ffffff" stroke="#dc2626" stroke-width="1.5" stroke-dasharray="4 3" rx="4"/>
+    <text x="60" y="430" font-size="11" font-weight="bold" fill="#7f1d1d">总开销：</text>
+    <text x="60" y="450" font-size="10" fill="#7f1d1d">• N × 5μs launch = 500μs（N=100 训练步）</text>
+    <text x="60" y="466" font-size="10" fill="#7f1d1d">• 多 comm 场景：comm A 等 B、B 等 A 可能死锁</text>
+    <text x="60" y="482" font-size="10" fill="#7f1d1d">• 不可被 CUDA Graph capture（多次 launch）</text>
+
+    <!-- multi-comm deadlock example -->
+    <rect x="50" y="505" width="450" height="75" fill="#fee2e2" stroke="#7f1d1d" stroke-width="1" rx="4"/>
+    <text x="275" y="525" text-anchor="middle" font-size="11" font-weight="bold" fill="#7f1d1d">⚠️ 死锁场景示例</text>
+    <text x="60" y="545" font-size="9" fill="#7f1d1d">rank 0: send(commA) → recv(commB)</text>
+    <text x="60" y="558" font-size="9" fill="#7f1d1d">rank 1: send(commB) → recv(commA)</text>
+    <text x="60" y="572" font-size="9" fill="#7f1d1d" font-style="italic">两边各自卡在 send 等不到对端 → deadlock</text>
+  </g>
+
+  <!-- ============ RIGHT: 开 group ============ -->
+  <g transform="translate(640, 90)">
+    <rect x="0" y="0" width="520" height="600" fill="#f0fdf4" stroke="#16a34a" stroke-width="1.5" rx="6"/>
+    <text x="260" y="26" text-anchor="middle" font-size="14" font-weight="bold" fill="#14532d">② 开 group — 1 次 launch + N 个 WorkElem</text>
+    <text x="260" y="46" text-anchor="middle" font-size="10" fill="#14532d" font-style="italic">GroupStart 期间 enqueue 只 queue，不 launch；GroupEnd 时合并提交</text>
+
+    <line x1="30" y1="80" x2="30" y2="565" stroke="#94a3b8" stroke-width="2"/>
+    <text x="20" y="76" text-anchor="end" font-size="10" fill="#475569">time</text>
+    <polygon points="30,575 25,565 35,565" fill="#94a3b8"/>
+
+    <!-- ncclGroupStart -->
+    <rect x="50" y="80" width="450" height="38" fill="#bbf7d0" stroke="#14532d" stroke-width="1.5" rx="4"/>
+    <text x="60" y="100" font-size="11" font-weight="bold" fill="#14532d">▶ ncclGroupStart()</text>
+    <text x="60" y="114" font-size="9" fill="#14532d">tlGroupDepth++（thread-local，无锁）</text>
+
+    <!-- Queued call 1 -->
+    <rect x="50" y="130" width="450" height="38" fill="#dcfce7" stroke="#22c55e" stroke-width="1" stroke-dasharray="4 2" rx="4"/>
+    <text x="60" y="150" font-size="11" font-weight="bold" fill="#14532d">App: ncclAllReduce(grad₁, ...)</text>
+    <text x="60" y="164" font-size="9" fill="#14532d">→ enqueue: depth&gt;0 → 写 pendingWork[comm]，<tspan fill="#dc2626" font-weight="bold">不</tspan> launch</text>
+
+    <!-- Queued call 2 -->
+    <rect x="50" y="180" width="450" height="38" fill="#dcfce7" stroke="#22c55e" stroke-width="1" stroke-dasharray="4 2" rx="4"/>
+    <text x="60" y="200" font-size="11" font-weight="bold" fill="#14532d">App: ncclAllReduce(grad₂, ...)</text>
+    <text x="60" y="214" font-size="9" fill="#14532d">→ enqueue: depth&gt;0 → 写 pendingWork[comm]，<tspan fill="#dc2626" font-weight="bold">不</tspan> launch</text>
+
+    <!-- Queued call 3 -->
+    <rect x="50" y="230" width="450" height="38" fill="#dcfce7" stroke="#22c55e" stroke-width="1" stroke-dasharray="4 2" rx="4"/>
+    <text x="60" y="250" font-size="11" font-weight="bold" fill="#14532d">App: ncclAllReduce(grad₃, ...)</text>
+    <text x="60" y="264" font-size="9" fill="#14532d">→ enqueue: depth&gt;0 → 写 pendingWork[comm]，<tspan fill="#dc2626" font-weight="bold">不</tspan> launch</text>
+
+    <text x="260" y="290" text-anchor="middle" font-size="14" fill="#14532d">⋮</text>
+
+    <!-- Queued call N -->
+    <rect x="50" y="300" width="450" height="38" fill="#dcfce7" stroke="#22c55e" stroke-width="1" stroke-dasharray="4 2" rx="4"/>
+    <text x="60" y="320" font-size="11" font-weight="bold" fill="#14532d">App: ncclAllReduce(gradₙ, ...)</text>
+    <text x="60" y="334" font-size="9" fill="#14532d">→ enqueue: depth&gt;0 → 写 pendingWork[comm]，<tspan fill="#dc2626" font-weight="bold">不</tspan> launch</text>
+
+    <!-- ncclGroupEnd -->
+    <rect x="50" y="355" width="450" height="92" fill="#86efac" stroke="#14532d" stroke-width="2" rx="4"/>
+    <text x="60" y="375" font-size="11" font-weight="bold" fill="#14532d">▶ ncclGroupEnd()</text>
+    <text x="60" y="392" font-size="9" fill="#14532d">tlGroupDepth-- = 0 → 触发批量提交：</text>
+    <text x="60" y="406" font-size="9" fill="#14532d">  1. 收集所有 comm 的 pendingWork[]</text>
+    <text x="60" y="420" font-size="9" fill="#14532d">  2. 按 <tspan font-weight="bold">(kernelSymbol, stream)</tspan> 二维分桶</text>
+    <text x="60" y="432" font-size="9" fill="#14532d">     · 同桶 = 同 kernel + 同 stream，可合并 launch</text>
+    <text x="60" y="442" font-size="9" fill="#14532d">  3. 每桶 1 次 cudaLaunchKernel，参数 = 该桶 WorkElem[]</text>
+
+    <!-- Bucketed kernel launches -->
+    <rect x="50" y="462" width="450" height="68" fill="#22c55e" stroke="#14532d" stroke-width="2" rx="4"/>
+    <text x="60" y="482" font-size="11" font-weight="bold" fill="#ffffff">⚡ K 次 cudaLaunchKernel（K = 桶数，通常 K ≪ N）</text>
+    <text x="60" y="500" font-size="10" fill="#ffffff">同型 batch（100 次同 dtype/op/algo 的 AllReduce）→ <tspan font-weight="bold">K=1</tspan></text>
+    <text x="60" y="514" font-size="10" fill="#ffffff">混合原语（AllReduce + AllGather）→ K=2（不同 kernel 必拆）</text>
+    <text x="60" y="527" font-size="9" fill="#ffffff" font-style="italic">每个 kernel 内 blocks round-robin 分配到桶内各 WorkElem</text>
+
+    <!-- Cost summary -->
+    <rect x="50" y="545" width="450" height="48" fill="#ffffff" stroke="#14532d" stroke-width="1.5" stroke-dasharray="4 3" rx="4"/>
+    <text x="60" y="563" font-size="11" font-weight="bold" fill="#14532d">总开销 + 收益：</text>
+    <text x="60" y="579" font-size="10" fill="#14532d">• K × 5μs launch（K ≪ N，典型 K=1）→ 节省 (N−K)×5μs</text>
+    <text x="60" y="591" font-size="10" fill="#14532d">• 多 comm 顺序在 GroupEnd 全局编排 → 死锁消失（与 K 无关）</text>
+  </g>
+
+  <!-- ============ BOTTOM: state machine ============ -->
+  <g transform="translate(40, 700)">
+    <text x="560" y="0" text-anchor="middle" font-size="11" fill="#64748b" font-style="italic">
+      group 是 thread-local 装饰器：depth 计数器 + per-comm pending 队列；无锁、零跨线程同步；嵌套 group 支持（库 / 框架各自包裹），最外层 End 才 launch
+    </text>
+  </g>
+</svg>

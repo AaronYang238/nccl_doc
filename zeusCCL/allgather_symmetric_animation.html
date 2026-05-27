@@ -1,0 +1,861 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Allgather(n=16)-PS1-steps=4-rank-symmetric-final48 Animation</title>
+  <style>
+    :root {
+      color-scheme: light;
+      font-family: Inter, "Segoe UI", Arial, sans-serif;
+      background: #f6f7fb;
+      color: #172033;
+    }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      grid-template-columns: minmax(760px, 1fr) 360px;
+      gap: 18px;
+      padding: 18px;
+      box-sizing: border-box;
+    }
+    main, aside {
+      background: #ffffff;
+      border: 1px solid #dfe4ef;
+      border-radius: 8px;
+      box-shadow: 0 10px 28px rgba(23, 32, 51, 0.08);
+    }
+    main {
+      min-height: calc(100vh - 36px);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 14px 16px;
+      border-bottom: 1px solid #e8ecf4;
+    }
+    h1 {
+      margin: 0;
+      font-size: 18px;
+      font-weight: 700;
+      letter-spacing: 0;
+    }
+    .controls {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+    button {
+      border: 1px solid #cbd4e4;
+      background: #ffffff;
+      color: #172033;
+      border-radius: 6px;
+      height: 34px;
+      min-width: 40px;
+      padding: 0 11px;
+      cursor: pointer;
+      font-weight: 650;
+    }
+    button.primary {
+      background: #1f6feb;
+      color: #ffffff;
+      border-color: #1f6feb;
+    }
+    input[type="range"] {
+      width: 120px;
+      accent-color: #1f6feb;
+    }
+    select {
+      height: 34px;
+      border: 1px solid #cbd4e4;
+      border-radius: 6px;
+      background: #ffffff;
+      color: #172033;
+      padding: 0 8px;
+      font-weight: 650;
+    }
+    canvas {
+      flex: 1;
+      width: 100%;
+      min-height: 620px;
+      display: block;
+    }
+    aside {
+      min-height: calc(100vh - 36px);
+      padding: 16px;
+      box-sizing: border-box;
+      overflow: auto;
+    }
+    .stat {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 8px;
+      padding: 9px 0;
+      border-bottom: 1px solid #edf0f6;
+      font-size: 14px;
+    }
+    .stat strong {
+      font-size: 16px;
+    }
+    .legend {
+      margin-top: 14px;
+      display: grid;
+      gap: 8px;
+      font-size: 13px;
+      color: #4c5870;
+    }
+    .legend span {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .swatch {
+      width: 18px;
+      height: 10px;
+      border-radius: 4px;
+      display: inline-block;
+    }
+    .panelTitle {
+      margin: 16px 0 8px;
+      font-size: 13px;
+      font-weight: 750;
+      color: #172033;
+    }
+    #sendList, #holdingList {
+      margin-top: 14px;
+      display: grid;
+      gap: 7px;
+      font-size: 13px;
+    }
+    #sendList {
+      max-height: 260px;
+      overflow-y: auto;
+      padding-right: 5px;
+    }
+    #holdingList {
+      max-height: 360px;
+      overflow-y: auto;
+      padding-right: 5px;
+    }
+    .send {
+      display: grid;
+      grid-template-columns: 44px 1fr;
+      align-items: center;
+      gap: 8px;
+      padding: 7px 8px;
+      background: #f7f9fc;
+      border: 1px solid #e6ebf3;
+      border-radius: 6px;
+    }
+    .holding {
+      display: grid;
+      grid-template-columns: 36px 1fr;
+      gap: 8px;
+      padding: 8px;
+      background: #fbfcfe;
+      border: 1px solid #e6ebf3;
+      border-radius: 6px;
+    }
+    .rank {
+      font-weight: 750;
+      color: #172033;
+    }
+    .chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+    }
+    .miniChunk {
+      min-width: 22px;
+      height: 20px;
+      padding: 0 4px;
+      border-radius: 5px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      color: #ffffff;
+      font-size: 11px;
+      font-weight: 750;
+    }
+    .chunk {
+      height: 22px;
+      min-width: 34px;
+      border-radius: 5px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      color: #ffffff;
+      font-weight: 750;
+      font-size: 12px;
+    }
+    .rankTableSection {
+      grid-column: 1 / -1;
+      background: #ffffff;
+      border: 1px solid #dfe4ef;
+      border-radius: 8px;
+      box-shadow: 0 10px 28px rgba(23, 32, 51, 0.08);
+      padding: 12px;
+    }
+    .rankTableSection h2 {
+      margin: 0 0 8px;
+      font-size: 15px;
+      letter-spacing: 0;
+    }
+    .rankTableWrap {
+      max-height: 440px;
+      overflow: auto;
+      border: 1px solid #e3e8f2;
+      border-radius: 8px;
+    }
+    .rankTable {
+      width: max-content;
+      min-width: 100%;
+      border-collapse: collapse;
+      font-size: 11px;
+    }
+    .rankTable th, .rankTable td {
+      border: 1px solid #e6ebf3;
+      padding: 4px 6px;
+      vertical-align: top;
+      min-width: 78px;
+    }
+    .rankTable thead th {
+      position: sticky;
+      top: 0;
+      z-index: 2;
+      background: #eef3fb;
+    }
+    .rankTable tbody th {
+      position: sticky;
+      left: 0;
+      z-index: 1;
+      background: #f7f9fc;
+      min-width: 58px;
+      white-space: nowrap;
+    }
+    .rankSend {
+      display: block;
+      line-height: 1.22;
+      white-space: nowrap;
+    }
+    .emptySend {
+      color: #9aa8bd;
+    }
+    @media (max-width: 1120px) {
+      body {
+        grid-template-columns: 1fr;
+      }
+      main, aside {
+        min-height: auto;
+      }
+      canvas {
+        min-height: 560px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>Allgather(n=16)-PS1-steps=4-rank-symmetric-final48</h1>
+      <div class="controls">
+        <button id="prevBtn" title="上一步">◀</button>
+        <button id="playBtn" class="primary" title="播放或暂停">暂停</button>
+        <button id="nextBtn" title="下一步">▶</button>
+        <button id="resetBtn" title="回到第 1 步">重置</button>
+        <label>Chunk <select id="chunkFilter"></select></label>
+        <label>速度 <input id="speed" type="range" min="0.15" max="1.6" step="0.05" value="0.55"></label>
+      </div>
+    </header>
+    <canvas id="canvas"></canvas>
+  </main>
+  <aside>
+    <div class="stat"><span>当前 Step</span><strong id="stepText"></strong></div>
+    <div class="stat"><span>本步传输数</span><strong id="sendCount"></strong></div>
+    <div class="stat"><span>已完成 Chunk 覆盖</span><strong id="coverage"></strong></div>
+    <div class="legend">
+      <span><i class="swatch" style="background:#d9e1ef"></i>拓扑可用链路</span>
+      <span><i class="swatch" style="background:#1f6feb"></i>本 step 正在传输</span>
+      <span><i class="swatch" style="background:#19a974"></i>rank 已持有的数据块数量</span>
+    </div>
+    <div class="panelTitle">本步传输记录</div>
+    <div id="sendList"></div>
+    <div class="panelTitle">节点当前持有数据</div>
+    <div id="holdingList"></div>
+  </aside>
+
+  <section class="rankTableSection">
+    <h2>Step × Rank 发送表</h2>
+    <div class="rankTableWrap">
+      <table class="rankTable">
+        <thead>
+          <tr>
+            <th>Step</th>
+            <th>R0</th><th>R1</th><th>R2</th><th>R3</th><th>R4</th><th>R5</th><th>R6</th><th>R7</th><th>R8</th><th>R9</th><th>R10</th><th>R11</th><th>R12</th><th>R13</th><th>R14</th><th>R15</th>
+          </tr>
+        </thead>
+        <tbody>
+          
+        <tr>
+          <th>Step 1</th>
+          <td><span class="rankSend">C0 -> R1</span><span class="rankSend">C0 -> R2</span><span class="rankSend">C0 -> R3</span><span class="rankSend">C0 -> R6</span></td><td><span class="rankSend">C1 -> R0</span><span class="rankSend">C1 -> R2</span><span class="rankSend">C1 -> R3</span><span class="rankSend">C1 -> R7</span></td><td><span class="rankSend">C2 -> R0</span><span class="rankSend">C2 -> R1</span><span class="rankSend">C2 -> R3</span><span class="rankSend">C2 -> R12</span></td><td><span class="rankSend">C3 -> R0</span><span class="rankSend">C3 -> R1</span><span class="rankSend">C3 -> R2</span><span class="rankSend">C3 -> R13</span></td><td><span class="rankSend">C4 -> R5</span><span class="rankSend">C4 -> R6</span><span class="rankSend">C4 -> R7</span><span class="rankSend">C4 -> R10</span></td><td><span class="rankSend">C5 -> R4</span><span class="rankSend">C5 -> R6</span><span class="rankSend">C5 -> R7</span><span class="rankSend">C5 -> R11</span></td><td><span class="rankSend">C6 -> R0</span><span class="rankSend">C6 -> R4</span><span class="rankSend">C6 -> R5</span><span class="rankSend">C6 -> R7</span></td><td><span class="rankSend">C7 -> R1</span><span class="rankSend">C7 -> R4</span><span class="rankSend">C7 -> R5</span><span class="rankSend">C7 -> R6</span></td><td><span class="rankSend">C8 -> R9</span><span class="rankSend">C8 -> R10</span><span class="rankSend">C8 -> R11</span><span class="rankSend">C8 -> R14</span></td><td><span class="rankSend">C9 -> R8</span><span class="rankSend">C9 -> R10</span><span class="rankSend">C9 -> R11</span><span class="rankSend">C9 -> R15</span></td><td><span class="rankSend">C10 -> R4</span><span class="rankSend">C10 -> R8</span><span class="rankSend">C10 -> R9</span><span class="rankSend">C10 -> R11</span></td><td><span class="rankSend">C11 -> R5</span><span class="rankSend">C11 -> R8</span><span class="rankSend">C11 -> R9</span><span class="rankSend">C11 -> R10</span></td><td><span class="rankSend">C12 -> R2</span><span class="rankSend">C12 -> R13</span><span class="rankSend">C12 -> R14</span><span class="rankSend">C12 -> R15</span></td><td><span class="rankSend">C13 -> R3</span><span class="rankSend">C13 -> R12</span><span class="rankSend">C13 -> R14</span><span class="rankSend">C13 -> R15</span></td><td><span class="rankSend">C14 -> R8</span><span class="rankSend">C14 -> R12</span><span class="rankSend">C14 -> R13</span><span class="rankSend">C14 -> R15</span></td><td><span class="rankSend">C15 -> R9</span><span class="rankSend">C15 -> R12</span><span class="rankSend">C15 -> R13</span><span class="rankSend">C15 -> R14</span></td>
+        </tr>
+        <tr>
+          <th>Step 2</th>
+          <td><span class="rankSend">C3 -> R6</span><span class="rankSend">C6 -> R1</span><span class="rankSend">C6 -> R2</span><span class="rankSend">C6 -> R3</span></td><td><span class="rankSend">C2 -> R7</span><span class="rankSend">C7 -> R0</span><span class="rankSend">C7 -> R2</span><span class="rankSend">C7 -> R3</span></td><td><span class="rankSend">C1 -> R12</span><span class="rankSend">C12 -> R0</span><span class="rankSend">C12 -> R1</span><span class="rankSend">C12 -> R3</span></td><td><span class="rankSend">C0 -> R13</span><span class="rankSend">C13 -> R0</span><span class="rankSend">C13 -> R1</span><span class="rankSend">C13 -> R2</span></td><td><span class="rankSend">C7 -> R10</span><span class="rankSend">C10 -> R5</span><span class="rankSend">C10 -> R6</span><span class="rankSend">C10 -> R7</span></td><td><span class="rankSend">C6 -> R11</span><span class="rankSend">C11 -> R4</span><span class="rankSend">C11 -> R6</span><span class="rankSend">C11 -> R7</span></td><td><span class="rankSend">C0 -> R4</span><span class="rankSend">C0 -> R5</span><span class="rankSend">C0 -> R7</span><span class="rankSend">C5 -> R0</span></td><td><span class="rankSend">C1 -> R4</span><span class="rankSend">C1 -> R5</span><span class="rankSend">C1 -> R6</span><span class="rankSend">C4 -> R1</span></td><td><span class="rankSend">C11 -> R14</span><span class="rankSend">C14 -> R9</span><span class="rankSend">C14 -> R10</span><span class="rankSend">C14 -> R11</span></td><td><span class="rankSend">C10 -> R15</span><span class="rankSend">C15 -> R8</span><span class="rankSend">C15 -> R10</span><span class="rankSend">C15 -> R11</span></td><td><span class="rankSend">C4 -> R8</span><span class="rankSend">C4 -> R9</span><span class="rankSend">C4 -> R11</span><span class="rankSend">C9 -> R4</span></td><td><span class="rankSend">C5 -> R8</span><span class="rankSend">C5 -> R9</span><span class="rankSend">C5 -> R10</span><span class="rankSend">C8 -> R5</span></td><td><span class="rankSend">C2 -> R13</span><span class="rankSend">C2 -> R14</span><span class="rankSend">C2 -> R15</span><span class="rankSend">C15 -> R2</span></td><td><span class="rankSend">C3 -> R12</span><span class="rankSend">C3 -> R14</span><span class="rankSend">C3 -> R15</span><span class="rankSend">C14 -> R3</span></td><td><span class="rankSend">C8 -> R12</span><span class="rankSend">C8 -> R13</span><span class="rankSend">C8 -> R15</span><span class="rankSend">C13 -> R8</span></td><td><span class="rankSend">C9 -> R12</span><span class="rankSend">C9 -> R13</span><span class="rankSend">C9 -> R14</span><span class="rankSend">C12 -> R9</span></td>
+        </tr>
+        <tr>
+          <th>Step 3</th>
+          <td><span class="rankSend">C5 -> R1</span><span class="rankSend">C5 -> R2</span><span class="rankSend">C5 -> R3</span><span class="rankSend">C13 -> R6</span></td><td><span class="rankSend">C4 -> R0</span><span class="rankSend">C4 -> R2</span><span class="rankSend">C4 -> R3</span><span class="rankSend">C12 -> R7</span></td><td><span class="rankSend">C7 -> R12</span><span class="rankSend">C15 -> R0</span><span class="rankSend">C15 -> R1</span><span class="rankSend">C15 -> R3</span></td><td><span class="rankSend">C6 -> R13</span><span class="rankSend">C14 -> R0</span><span class="rankSend">C14 -> R1</span><span class="rankSend">C14 -> R2</span></td><td><span class="rankSend">C1 -> R10</span><span class="rankSend">C9 -> R5</span><span class="rankSend">C9 -> R6</span><span class="rankSend">C9 -> R7</span></td><td><span class="rankSend">C0 -> R11</span><span class="rankSend">C8 -> R4</span><span class="rankSend">C8 -> R6</span><span class="rankSend">C8 -> R7</span></td><td><span class="rankSend">C3 -> R4</span><span class="rankSend">C3 -> R5</span><span class="rankSend">C3 -> R7</span><span class="rankSend">C11 -> R0</span></td><td><span class="rankSend">C2 -> R4</span><span class="rankSend">C2 -> R5</span><span class="rankSend">C2 -> R6</span><span class="rankSend">C10 -> R1</span></td><td><span class="rankSend">C5 -> R14</span><span class="rankSend">C13 -> R9</span><span class="rankSend">C13 -> R10</span><span class="rankSend">C13 -> R11</span></td><td><span class="rankSend">C4 -> R15</span><span class="rankSend">C12 -> R8</span><span class="rankSend">C12 -> R10</span><span class="rankSend">C12 -> R11</span></td><td><span class="rankSend">C7 -> R8</span><span class="rankSend">C7 -> R9</span><span class="rankSend">C7 -> R11</span><span class="rankSend">C15 -> R4</span></td><td><span class="rankSend">C6 -> R8</span><span class="rankSend">C6 -> R9</span><span class="rankSend">C6 -> R10</span><span class="rankSend">C14 -> R5</span></td><td><span class="rankSend">C1 -> R13</span><span class="rankSend">C1 -> R14</span><span class="rankSend">C1 -> R15</span><span class="rankSend">C9 -> R2</span></td><td><span class="rankSend">C0 -> R12</span><span class="rankSend">C0 -> R14</span><span class="rankSend">C0 -> R15</span><span class="rankSend">C8 -> R3</span></td><td><span class="rankSend">C3 -> R8</span><span class="rankSend">C11 -> R12</span><span class="rankSend">C11 -> R13</span><span class="rankSend">C11 -> R15</span></td><td><span class="rankSend">C2 -> R9</span><span class="rankSend">C10 -> R12</span><span class="rankSend">C10 -> R13</span><span class="rankSend">C10 -> R14</span></td>
+        </tr>
+        <tr>
+          <th>Step 4</th>
+          <td><span class="rankSend">C11 -> R1</span><span class="rankSend">C11 -> R2</span><span class="rankSend">C11 -> R3</span></td><td><span class="rankSend">C10 -> R0</span><span class="rankSend">C10 -> R2</span><span class="rankSend">C10 -> R3</span></td><td><span class="rankSend">C9 -> R0</span><span class="rankSend">C9 -> R1</span><span class="rankSend">C9 -> R3</span></td><td><span class="rankSend">C8 -> R0</span><span class="rankSend">C8 -> R1</span><span class="rankSend">C8 -> R2</span></td><td><span class="rankSend">C15 -> R5</span><span class="rankSend">C15 -> R6</span><span class="rankSend">C15 -> R7</span></td><td><span class="rankSend">C14 -> R4</span><span class="rankSend">C14 -> R6</span><span class="rankSend">C14 -> R7</span></td><td><span class="rankSend">C13 -> R4</span><span class="rankSend">C13 -> R5</span><span class="rankSend">C13 -> R7</span></td><td><span class="rankSend">C12 -> R4</span><span class="rankSend">C12 -> R5</span><span class="rankSend">C12 -> R6</span></td><td><span class="rankSend">C3 -> R9</span><span class="rankSend">C3 -> R10</span><span class="rankSend">C3 -> R11</span></td><td><span class="rankSend">C2 -> R8</span><span class="rankSend">C2 -> R10</span><span class="rankSend">C2 -> R11</span></td><td><span class="rankSend">C1 -> R8</span><span class="rankSend">C1 -> R9</span><span class="rankSend">C1 -> R11</span></td><td><span class="rankSend">C0 -> R8</span><span class="rankSend">C0 -> R9</span><span class="rankSend">C0 -> R10</span></td><td><span class="rankSend">C7 -> R13</span><span class="rankSend">C7 -> R14</span><span class="rankSend">C7 -> R15</span></td><td><span class="rankSend">C6 -> R12</span><span class="rankSend">C6 -> R14</span><span class="rankSend">C6 -> R15</span></td><td><span class="rankSend">C5 -> R12</span><span class="rankSend">C5 -> R13</span><span class="rankSend">C5 -> R15</span></td><td><span class="rankSend">C4 -> R12</span><span class="rankSend">C4 -> R13</span><span class="rankSend">C4 -> R14</span></td>
+        </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <script>
+    const algorithm = {"name": "Allgather(n=16)-PS1-steps=4-rank-symmetric-final48", "nodes": 16, "steps": [[{"chunk": 0, "src": 0, "dst": 1}, {"chunk": 0, "src": 0, "dst": 2}, {"chunk": 0, "src": 0, "dst": 3}, {"chunk": 0, "src": 0, "dst": 6}, {"chunk": 1, "src": 1, "dst": 0}, {"chunk": 1, "src": 1, "dst": 2}, {"chunk": 1, "src": 1, "dst": 3}, {"chunk": 1, "src": 1, "dst": 7}, {"chunk": 2, "src": 2, "dst": 0}, {"chunk": 2, "src": 2, "dst": 1}, {"chunk": 2, "src": 2, "dst": 3}, {"chunk": 2, "src": 2, "dst": 12}, {"chunk": 3, "src": 3, "dst": 0}, {"chunk": 3, "src": 3, "dst": 1}, {"chunk": 3, "src": 3, "dst": 2}, {"chunk": 3, "src": 3, "dst": 13}, {"chunk": 4, "src": 4, "dst": 5}, {"chunk": 4, "src": 4, "dst": 6}, {"chunk": 4, "src": 4, "dst": 7}, {"chunk": 4, "src": 4, "dst": 10}, {"chunk": 5, "src": 5, "dst": 4}, {"chunk": 5, "src": 5, "dst": 6}, {"chunk": 5, "src": 5, "dst": 7}, {"chunk": 5, "src": 5, "dst": 11}, {"chunk": 6, "src": 6, "dst": 0}, {"chunk": 6, "src": 6, "dst": 4}, {"chunk": 6, "src": 6, "dst": 5}, {"chunk": 6, "src": 6, "dst": 7}, {"chunk": 7, "src": 7, "dst": 1}, {"chunk": 7, "src": 7, "dst": 4}, {"chunk": 7, "src": 7, "dst": 5}, {"chunk": 7, "src": 7, "dst": 6}, {"chunk": 8, "src": 8, "dst": 9}, {"chunk": 8, "src": 8, "dst": 10}, {"chunk": 8, "src": 8, "dst": 11}, {"chunk": 8, "src": 8, "dst": 14}, {"chunk": 9, "src": 9, "dst": 8}, {"chunk": 9, "src": 9, "dst": 10}, {"chunk": 9, "src": 9, "dst": 11}, {"chunk": 9, "src": 9, "dst": 15}, {"chunk": 10, "src": 10, "dst": 4}, {"chunk": 10, "src": 10, "dst": 8}, {"chunk": 10, "src": 10, "dst": 9}, {"chunk": 10, "src": 10, "dst": 11}, {"chunk": 11, "src": 11, "dst": 5}, {"chunk": 11, "src": 11, "dst": 8}, {"chunk": 11, "src": 11, "dst": 9}, {"chunk": 11, "src": 11, "dst": 10}, {"chunk": 12, "src": 12, "dst": 2}, {"chunk": 12, "src": 12, "dst": 13}, {"chunk": 12, "src": 12, "dst": 14}, {"chunk": 12, "src": 12, "dst": 15}, {"chunk": 13, "src": 13, "dst": 3}, {"chunk": 13, "src": 13, "dst": 12}, {"chunk": 13, "src": 13, "dst": 14}, {"chunk": 13, "src": 13, "dst": 15}, {"chunk": 14, "src": 14, "dst": 8}, {"chunk": 14, "src": 14, "dst": 12}, {"chunk": 14, "src": 14, "dst": 13}, {"chunk": 14, "src": 14, "dst": 15}, {"chunk": 15, "src": 15, "dst": 9}, {"chunk": 15, "src": 15, "dst": 12}, {"chunk": 15, "src": 15, "dst": 13}, {"chunk": 15, "src": 15, "dst": 14}], [{"chunk": 0, "src": 3, "dst": 13}, {"chunk": 0, "src": 6, "dst": 4}, {"chunk": 0, "src": 6, "dst": 5}, {"chunk": 0, "src": 6, "dst": 7}, {"chunk": 1, "src": 2, "dst": 12}, {"chunk": 1, "src": 7, "dst": 4}, {"chunk": 1, "src": 7, "dst": 5}, {"chunk": 1, "src": 7, "dst": 6}, {"chunk": 2, "src": 1, "dst": 7}, {"chunk": 2, "src": 12, "dst": 13}, {"chunk": 2, "src": 12, "dst": 14}, {"chunk": 2, "src": 12, "dst": 15}, {"chunk": 3, "src": 0, "dst": 6}, {"chunk": 3, "src": 13, "dst": 12}, {"chunk": 3, "src": 13, "dst": 14}, {"chunk": 3, "src": 13, "dst": 15}, {"chunk": 4, "src": 7, "dst": 1}, {"chunk": 4, "src": 10, "dst": 8}, {"chunk": 4, "src": 10, "dst": 9}, {"chunk": 4, "src": 10, "dst": 11}, {"chunk": 5, "src": 6, "dst": 0}, {"chunk": 5, "src": 11, "dst": 8}, {"chunk": 5, "src": 11, "dst": 9}, {"chunk": 5, "src": 11, "dst": 10}, {"chunk": 6, "src": 0, "dst": 1}, {"chunk": 6, "src": 0, "dst": 2}, {"chunk": 6, "src": 0, "dst": 3}, {"chunk": 6, "src": 5, "dst": 11}, {"chunk": 7, "src": 1, "dst": 0}, {"chunk": 7, "src": 1, "dst": 2}, {"chunk": 7, "src": 1, "dst": 3}, {"chunk": 7, "src": 4, "dst": 10}, {"chunk": 8, "src": 11, "dst": 5}, {"chunk": 8, "src": 14, "dst": 12}, {"chunk": 8, "src": 14, "dst": 13}, {"chunk": 8, "src": 14, "dst": 15}, {"chunk": 9, "src": 10, "dst": 4}, {"chunk": 9, "src": 15, "dst": 12}, {"chunk": 9, "src": 15, "dst": 13}, {"chunk": 9, "src": 15, "dst": 14}, {"chunk": 10, "src": 4, "dst": 5}, {"chunk": 10, "src": 4, "dst": 6}, {"chunk": 10, "src": 4, "dst": 7}, {"chunk": 10, "src": 9, "dst": 15}, {"chunk": 11, "src": 5, "dst": 4}, {"chunk": 11, "src": 5, "dst": 6}, {"chunk": 11, "src": 5, "dst": 7}, {"chunk": 11, "src": 8, "dst": 14}, {"chunk": 12, "src": 2, "dst": 0}, {"chunk": 12, "src": 2, "dst": 1}, {"chunk": 12, "src": 2, "dst": 3}, {"chunk": 12, "src": 15, "dst": 9}, {"chunk": 13, "src": 3, "dst": 0}, {"chunk": 13, "src": 3, "dst": 1}, {"chunk": 13, "src": 3, "dst": 2}, {"chunk": 13, "src": 14, "dst": 8}, {"chunk": 14, "src": 8, "dst": 9}, {"chunk": 14, "src": 8, "dst": 10}, {"chunk": 14, "src": 8, "dst": 11}, {"chunk": 14, "src": 13, "dst": 3}, {"chunk": 15, "src": 9, "dst": 8}, {"chunk": 15, "src": 9, "dst": 10}, {"chunk": 15, "src": 9, "dst": 11}, {"chunk": 15, "src": 12, "dst": 2}], [{"chunk": 0, "src": 5, "dst": 11}, {"chunk": 0, "src": 13, "dst": 12}, {"chunk": 0, "src": 13, "dst": 14}, {"chunk": 0, "src": 13, "dst": 15}, {"chunk": 1, "src": 4, "dst": 10}, {"chunk": 1, "src": 12, "dst": 13}, {"chunk": 1, "src": 12, "dst": 14}, {"chunk": 1, "src": 12, "dst": 15}, {"chunk": 2, "src": 7, "dst": 4}, {"chunk": 2, "src": 7, "dst": 5}, {"chunk": 2, "src": 7, "dst": 6}, {"chunk": 2, "src": 15, "dst": 9}, {"chunk": 3, "src": 6, "dst": 4}, {"chunk": 3, "src": 6, "dst": 5}, {"chunk": 3, "src": 6, "dst": 7}, {"chunk": 3, "src": 14, "dst": 8}, {"chunk": 4, "src": 1, "dst": 0}, {"chunk": 4, "src": 1, "dst": 2}, {"chunk": 4, "src": 1, "dst": 3}, {"chunk": 4, "src": 9, "dst": 15}, {"chunk": 5, "src": 0, "dst": 1}, {"chunk": 5, "src": 0, "dst": 2}, {"chunk": 5, "src": 0, "dst": 3}, {"chunk": 5, "src": 8, "dst": 14}, {"chunk": 6, "src": 3, "dst": 13}, {"chunk": 6, "src": 11, "dst": 8}, {"chunk": 6, "src": 11, "dst": 9}, {"chunk": 6, "src": 11, "dst": 10}, {"chunk": 7, "src": 2, "dst": 12}, {"chunk": 7, "src": 10, "dst": 8}, {"chunk": 7, "src": 10, "dst": 9}, {"chunk": 7, "src": 10, "dst": 11}, {"chunk": 8, "src": 5, "dst": 4}, {"chunk": 8, "src": 5, "dst": 6}, {"chunk": 8, "src": 5, "dst": 7}, {"chunk": 8, "src": 13, "dst": 3}, {"chunk": 9, "src": 4, "dst": 5}, {"chunk": 9, "src": 4, "dst": 6}, {"chunk": 9, "src": 4, "dst": 7}, {"chunk": 9, "src": 12, "dst": 2}, {"chunk": 10, "src": 7, "dst": 1}, {"chunk": 10, "src": 15, "dst": 12}, {"chunk": 10, "src": 15, "dst": 13}, {"chunk": 10, "src": 15, "dst": 14}, {"chunk": 11, "src": 6, "dst": 0}, {"chunk": 11, "src": 14, "dst": 12}, {"chunk": 11, "src": 14, "dst": 13}, {"chunk": 11, "src": 14, "dst": 15}, {"chunk": 12, "src": 1, "dst": 7}, {"chunk": 12, "src": 9, "dst": 8}, {"chunk": 12, "src": 9, "dst": 10}, {"chunk": 12, "src": 9, "dst": 11}, {"chunk": 13, "src": 0, "dst": 6}, {"chunk": 13, "src": 8, "dst": 9}, {"chunk": 13, "src": 8, "dst": 10}, {"chunk": 13, "src": 8, "dst": 11}, {"chunk": 14, "src": 3, "dst": 0}, {"chunk": 14, "src": 3, "dst": 1}, {"chunk": 14, "src": 3, "dst": 2}, {"chunk": 14, "src": 11, "dst": 5}, {"chunk": 15, "src": 2, "dst": 0}, {"chunk": 15, "src": 2, "dst": 1}, {"chunk": 15, "src": 2, "dst": 3}, {"chunk": 15, "src": 10, "dst": 4}], [{"chunk": 0, "src": 11, "dst": 8}, {"chunk": 0, "src": 11, "dst": 9}, {"chunk": 0, "src": 11, "dst": 10}, {"chunk": 1, "src": 10, "dst": 8}, {"chunk": 1, "src": 10, "dst": 9}, {"chunk": 1, "src": 10, "dst": 11}, {"chunk": 2, "src": 9, "dst": 8}, {"chunk": 2, "src": 9, "dst": 10}, {"chunk": 2, "src": 9, "dst": 11}, {"chunk": 3, "src": 8, "dst": 9}, {"chunk": 3, "src": 8, "dst": 10}, {"chunk": 3, "src": 8, "dst": 11}, {"chunk": 4, "src": 15, "dst": 12}, {"chunk": 4, "src": 15, "dst": 13}, {"chunk": 4, "src": 15, "dst": 14}, {"chunk": 5, "src": 14, "dst": 12}, {"chunk": 5, "src": 14, "dst": 13}, {"chunk": 5, "src": 14, "dst": 15}, {"chunk": 6, "src": 13, "dst": 12}, {"chunk": 6, "src": 13, "dst": 14}, {"chunk": 6, "src": 13, "dst": 15}, {"chunk": 7, "src": 12, "dst": 13}, {"chunk": 7, "src": 12, "dst": 14}, {"chunk": 7, "src": 12, "dst": 15}, {"chunk": 8, "src": 3, "dst": 0}, {"chunk": 8, "src": 3, "dst": 1}, {"chunk": 8, "src": 3, "dst": 2}, {"chunk": 9, "src": 2, "dst": 0}, {"chunk": 9, "src": 2, "dst": 1}, {"chunk": 9, "src": 2, "dst": 3}, {"chunk": 10, "src": 1, "dst": 0}, {"chunk": 10, "src": 1, "dst": 2}, {"chunk": 10, "src": 1, "dst": 3}, {"chunk": 11, "src": 0, "dst": 1}, {"chunk": 11, "src": 0, "dst": 2}, {"chunk": 11, "src": 0, "dst": 3}, {"chunk": 12, "src": 7, "dst": 4}, {"chunk": 12, "src": 7, "dst": 5}, {"chunk": 12, "src": 7, "dst": 6}, {"chunk": 13, "src": 6, "dst": 4}, {"chunk": 13, "src": 6, "dst": 5}, {"chunk": 13, "src": 6, "dst": 7}, {"chunk": 14, "src": 5, "dst": 4}, {"chunk": 14, "src": 5, "dst": 6}, {"chunk": 14, "src": 5, "dst": 7}, {"chunk": 15, "src": 4, "dst": 5}, {"chunk": 15, "src": 4, "dst": 6}, {"chunk": 15, "src": 4, "dst": 7}]], "links": [[0, 1, 1, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0], [1, 0, 1, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0], [1, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0], [1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0], [0, 0, 0, 0, 0, 1, 1, 1, 0, 0, 1, 0, 0, 0, 0, 0], [0, 0, 0, 0, 1, 0, 1, 1, 0, 0, 0, 1, 0, 0, 0, 0], [1, 0, 0, 0, 1, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0], [0, 1, 0, 0, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 0, 0, 1, 0], [0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 1, 0, 0, 0, 1], [0, 0, 0, 0, 1, 0, 0, 0, 1, 1, 0, 1, 0, 0, 0, 0], [0, 0, 0, 0, 0, 1, 0, 0, 1, 1, 1, 0, 0, 0, 0, 0], [0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1], [0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 1], [0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 1, 0, 1], [0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 1, 1, 0]], "inputMap": {"0": [0], "1": [1], "2": [2], "3": [3], "4": [4], "5": [5], "6": [6], "7": [7], "8": [8], "9": [9], "10": [10], "11": [11], "12": [12], "13": [13], "14": [14], "15": [15]}, "mode": "allgather"};
+    const canvas = document.getElementById("canvas");
+    const ctx = canvas.getContext("2d");
+    const playBtn = document.getElementById("playBtn");
+    const prevBtn = document.getElementById("prevBtn");
+    const nextBtn = document.getElementById("nextBtn");
+    const resetBtn = document.getElementById("resetBtn");
+    const speedInput = document.getElementById("speed");
+    const chunkFilter = document.getElementById("chunkFilter");
+    const stepText = document.getElementById("stepText");
+    const sendCount = document.getElementById("sendCount");
+    const coverageText = document.getElementById("coverage");
+    const sendList = document.getElementById("sendList");
+    const holdingList = document.getElementById("holdingList");
+
+    const colors = [
+      "#3867d6", "#eb3b5a", "#20bf6b", "#f7b731",
+      "#8854d0", "#0fb9b1", "#fa8231", "#45aaf2",
+      "#a55eea", "#26de81", "#fd9644", "#2d98da",
+      "#4b7bec", "#fc5c65", "#fed330", "#778ca3"
+    ];
+
+    let stepIndex = 0;
+    let playing = true;
+    let phase = 0;
+    let lastTime = 0;
+    let positions = [];
+    let groupCenters = [];
+    let holdings = [];
+
+    function initChunkFilter() {
+      chunkFilter.innerHTML = `<option value="all">${isReduceScatter() ? "全部(较拥挤)" : "全部"}</option>` + Array.from(
+        { length: algorithm.nodes },
+        (_, chunk) => `<option value="${chunk}">C${chunk}</option>`
+      ).join("");
+      if (isReduceScatter()) {
+        chunkFilter.value = "0";
+      }
+    }
+
+    function selectedChunk() {
+      return chunkFilter.value === "all" ? null : Number(chunkFilter.value);
+    }
+
+    function visibleSends() {
+      const chunk = selectedChunk();
+      const sends = algorithm.steps[stepIndex];
+      return chunk === null ? sends : sends.filter(send => send.chunk === chunk);
+    }
+
+    function isReduceScatter() {
+      return algorithm.mode === "reduce_scatter";
+    }
+
+    function resize() {
+      const rect = canvas.getBoundingClientRect();
+      const ratio = window.devicePixelRatio || 1;
+      canvas.width = Math.floor(rect.width * ratio);
+      canvas.height = Math.floor(rect.height * ratio);
+      ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+      layout();
+      draw();
+    }
+
+    function layout() {
+      const w = canvas.clientWidth;
+      const h = canvas.clientHeight;
+      const cx = w * 0.5;
+      const cy = h * 0.5;
+      const r = Math.min(w * 0.30, h * 0.30, 285);
+      const s = Math.min(Math.max(Math.min(w, h) * 0.145, 122), 168);
+      groupCenters = [
+        [cx, cy + r],
+        [cx - r, cy],
+        [cx, cy - r],
+        [cx + r, cy],
+      ];
+
+      const tl = [-s / 2, -s / 2];
+      const tr = [s / 2, -s / 2];
+      const bl = [-s / 2, s / 2];
+      const br = [s / 2, s / 2];
+      const groupOffsets = [
+        [tl, bl, br, tr],
+        [tl, tr, br, bl],
+        [tr, br, tl, bl],
+        [br, bl, tr, tl],
+      ];
+
+      positions = [];
+      for (let group = 0; group < groupCenters.length; group++) {
+        for (let local = 0; local < groupOffsets[group].length; local++) {
+          const offset = groupOffsets[group][local];
+          positions.push({
+            x: groupCenters[group][0] + offset[0],
+            y: groupCenters[group][1] + offset[1],
+            group,
+          });
+        }
+      }
+    }
+
+    function holdingsBefore(targetStep) {
+      let result;
+      if (isReduceScatter()) {
+        result = Array.from({ length: algorithm.nodes }, () =>
+          Array.from({ length: algorithm.nodes }, () => new Set())
+        );
+        for (const [rankText, chunks] of Object.entries(algorithm.inputMap)) {
+          const rank = Number(rankText);
+          for (const chunk of chunks) {
+            result[rank][chunk].add(rank);
+          }
+        }
+      } else {
+        result = Array.from({ length: algorithm.nodes }, () => new Set());
+        for (const [rankText, chunks] of Object.entries(algorithm.inputMap)) {
+          const rank = Number(rankText);
+          for (const chunk of chunks) {
+            result[rank].add(chunk);
+          }
+        }
+      }
+      for (let i = 0; i < targetStep; i++) {
+        if (isReduceScatter()) {
+          const before = result.map(rankState => rankState.map(contributors => new Set(contributors)));
+          const cleared = new Set();
+          for (const send of algorithm.steps[i]) {
+            cleared.add(`${send.src}:${send.chunk}`);
+          }
+          for (const item of cleared) {
+            const [rank, chunk] = item.split(":").map(Number);
+            result[rank][chunk].clear();
+          }
+          for (const send of algorithm.steps[i]) {
+            for (const contributor of before[send.src][send.chunk]) {
+              result[send.dst][send.chunk].add(contributor);
+            }
+          }
+        } else {
+          for (const send of algorithm.steps[i]) {
+            result[send.dst].add(send.chunk);
+          }
+        }
+      }
+      return result;
+    }
+
+    function chunkAmount(rank, chunk) {
+      return isReduceScatter()
+        ? holdings[rank][chunk].size
+        : (holdings[rank].has(chunk) ? 1 : 0);
+    }
+
+    function nodeAmount(rank) {
+      if (!isReduceScatter()) return holdings[rank].size;
+      return holdings[rank].reduce((sum, contributors) => sum + contributors.size, 0);
+    }
+
+    function rebuildState() {
+      holdings = holdingsBefore(stepIndex);
+      updateSidebar();
+    }
+
+    function updateSidebar() {
+      const chunk = selectedChunk();
+      const sends = visibleSends();
+      stepText.textContent = `${stepIndex + 1} / ${algorithm.steps.length}`;
+      sendCount.textContent = chunk === null ? sends.length : `${sends.length} 条 C${chunk}`;
+      const total = chunk === null
+        ? holdings.reduce((sum, _, rank) => sum + nodeAmount(rank), 0)
+        : holdings.reduce((sum, _, rank) => sum + chunkAmount(rank, chunk), 0);
+      coverageText.textContent = chunk === null
+        ? `${total} / ${algorithm.nodes * algorithm.nodes}`
+        : `${total} / ${isReduceScatter() ? algorithm.nodes : algorithm.nodes}`;
+      sendList.innerHTML = sends.map(send => `
+        <div class="send">
+          <span class="chunk" style="background:${colors[send.chunk % colors.length]}">C${send.chunk}</span>
+          <span>R${send.src} → R${send.dst}</span>
+        </div>
+      `).join("") || `<div class="send"><span></span><span>本 step 没有 C${chunk} 传输</span></div>`;
+      holdingList.innerHTML = holdings.map((rankState, rank) => {
+        let chunkItems;
+        if (isReduceScatter()) {
+          const shownChunks = chunk === null
+            ? rankState.map((contributors, item) => [item, contributors.size]).filter(([, amount]) => amount > 0)
+            : [[chunk, rankState[chunk].size]].filter(([, amount]) => amount > 0);
+          chunkItems = shownChunks.map(([item, amount]) => `
+            <span class="miniChunk" style="background:${colors[item % colors.length]}" title="${amount}/16 partials">${item}:${amount}</span>
+          `).join("");
+        } else {
+          const shownChunks = chunk === null ? [...rankState].sort((a, b) => a - b) : (rankState.has(chunk) ? [chunk] : []);
+          chunkItems = shownChunks.map(item => `
+            <span class="miniChunk" style="background:${colors[item % colors.length]}">${item}</span>
+          `).join("");
+        }
+        return `
+          <div class="holding">
+            <span class="rank">R${rank}</span>
+            <span class="chips">${chunkItems || `<span style="color:#8a96aa">-</span>`}</span>
+          </div>
+        `;
+      }).join("");
+    }
+
+    function drawArrow(from, to, color, width, alpha) {
+      const dx = to.x - from.x;
+      const dy = to.y - from.y;
+      const len = Math.hypot(dx, dy) || 1;
+      const ux = dx / len;
+      const uy = dy / len;
+      const start = { x: from.x + ux * 34, y: from.y + uy * 34 };
+      const end = { x: to.x - ux * 34, y: to.y - uy * 34 };
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      ctx.strokeStyle = color;
+      ctx.fillStyle = color;
+      ctx.lineWidth = width;
+      ctx.lineCap = "round";
+      ctx.beginPath();
+      ctx.moveTo(start.x, start.y);
+      ctx.lineTo(end.x, end.y);
+      ctx.stroke();
+
+      const angle = Math.atan2(end.y - start.y, end.x - start.x);
+      ctx.beginPath();
+      ctx.moveTo(end.x, end.y);
+      ctx.lineTo(end.x - 12 * Math.cos(angle - Math.PI / 6), end.y - 12 * Math.sin(angle - Math.PI / 6));
+      ctx.lineTo(end.x - 12 * Math.cos(angle + Math.PI / 6), end.y - 12 * Math.sin(angle + Math.PI / 6));
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+    }
+
+    function drawLine(from, to, color, width, alpha) {
+      const dx = to.x - from.x;
+      const dy = to.y - from.y;
+      const len = Math.hypot(dx, dy) || 1;
+      const ux = dx / len;
+      const uy = dy / len;
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      ctx.strokeStyle = color;
+      ctx.lineWidth = width;
+      ctx.lineCap = "round";
+      ctx.beginPath();
+      ctx.moveTo(from.x + ux * 34, from.y + uy * 34);
+      ctx.lineTo(to.x - ux * 34, to.y - uy * 34);
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    function drawCurve(from, to, color, width, alpha, control) {
+      const { start, end } = edgeEndpoints(from, to);
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      ctx.strokeStyle = color;
+      ctx.lineWidth = width;
+      ctx.lineCap = "round";
+      ctx.beginPath();
+      ctx.moveTo(start.x, start.y);
+      ctx.quadraticCurveTo(control.x, control.y, end.x, end.y);
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    function edgeKey(a, b) {
+      return [Math.min(a, b), Math.max(a, b)].join("-");
+    }
+
+    function edgeEndpoints(from, to) {
+      const dx = to.x - from.x;
+      const dy = to.y - from.y;
+      const len = Math.hypot(dx, dy) || 1;
+      const ux = dx / len;
+      const uy = dy / len;
+      return {
+        start: { x: from.x + ux * 34, y: from.y + uy * 34 },
+        end: { x: to.x - ux * 34, y: to.y - uy * 34 },
+      };
+    }
+
+    function crossControl(edge) {
+      const c = {
+        x: canvas.clientWidth * 0.5,
+        y: canvas.clientHeight * 0.5,
+      };
+      const outer = Math.min(canvas.clientWidth, canvas.clientHeight) * 0.32;
+      const inner = Math.min(canvas.clientWidth, canvas.clientHeight) * 0.15;
+      return {
+        "1-7": { x: c.x - outer, y: c.y + outer },
+        "4-10": { x: c.x - outer, y: c.y - outer },
+        "8-14": { x: c.x + outer, y: c.y - outer },
+        "2-12": { x: c.x + outer, y: c.y + outer },
+        "0-6": { x: c.x - inner, y: c.y + inner },
+        "5-11": { x: c.x - inner, y: c.y - inner },
+        "9-15": { x: c.x + inner, y: c.y - inner },
+        "3-13": { x: c.x + inner, y: c.y + inner },
+      }[edge];
+    }
+
+    function curvePoint(start, control, end, t) {
+      const oneMinusT = 1 - t;
+      return {
+        x: oneMinusT * oneMinusT * start.x + 2 * oneMinusT * t * control.x + t * t * end.x,
+        y: oneMinusT * oneMinusT * start.y + 2 * oneMinusT * t * control.y + t * t * end.y,
+      };
+    }
+
+    function drawCurveArrow(from, to, color, width, alpha, control) {
+      const { start, end } = edgeEndpoints(from, to);
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      ctx.strokeStyle = color;
+      ctx.fillStyle = color;
+      ctx.lineWidth = width;
+      ctx.lineCap = "round";
+      ctx.beginPath();
+      ctx.moveTo(start.x, start.y);
+      ctx.quadraticCurveTo(control.x, control.y, end.x, end.y);
+      ctx.stroke();
+
+      const angle = Math.atan2(end.y - control.y, end.x - control.x);
+      ctx.beginPath();
+      ctx.moveTo(end.x, end.y);
+      ctx.lineTo(end.x - 12 * Math.cos(angle - Math.PI / 6), end.y - 12 * Math.sin(angle - Math.PI / 6));
+      ctx.lineTo(end.x - 12 * Math.cos(angle + Math.PI / 6), end.y - 12 * Math.sin(angle + Math.PI / 6));
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+    }
+
+    function drawCrossGroupEdge(a, b) {
+      const edge = [Math.min(a, b), Math.max(a, b)].join("-");
+      const from = positions[a];
+      const to = positions[b];
+      drawCurve(from, to, "#aab8cc", 3, 0.95, crossControl(edge) || {
+        x: (from.x + to.x) / 2,
+        y: (from.y + to.y) / 2,
+      });
+    }
+
+    function drawTopology() {
+      for (let i = 0; i < algorithm.nodes; i++) {
+        for (let j = i + 1; j < algorithm.nodes; j++) {
+          if (algorithm.links[i][j] || algorithm.links[j][i]) {
+            const sameGroup = positions[i].group === positions[j].group;
+            if (sameGroup) {
+              drawLine(positions[i], positions[j], "#d9e1ef", 2, 0.85);
+            } else {
+              drawCrossGroupEdge(i, j);
+            }
+          }
+        }
+      }
+    }
+
+    function drawNodes() {
+      const chunk = selectedChunk();
+      for (let rank = 0; rank < algorithm.nodes; rank++) {
+        const pos = positions[rank];
+        const chunks = holdings[rank];
+        ctx.save();
+        ctx.fillStyle = "#ffffff";
+        ctx.strokeStyle = "#9aa8bd";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(pos.x, pos.y, 28, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+
+        ctx.fillStyle = "#172033";
+        ctx.font = "700 15px Segoe UI, Arial";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(`R${rank}`, pos.x, pos.y - 5);
+
+        const amount = chunk === null ? nodeAmount(rank) : chunkAmount(rank, chunk);
+        const denominator = algorithm.nodes;
+        const ratio = Math.min(1, amount / denominator);
+        ctx.fillStyle = "#19a974";
+        ctx.fillRect(pos.x - 18, pos.y + 12, 36 * ratio, 5);
+        ctx.strokeStyle = "#cfd8e7";
+        ctx.lineWidth = 1;
+        ctx.strokeRect(pos.x - 18, pos.y + 12, 36, 5);
+
+        ctx.fillStyle = "#4c5870";
+        ctx.font = "11px Segoe UI, Arial";
+        ctx.fillText(chunk === null
+          ? `${amount}/${denominator}`
+          : (amount ? `C${chunk}:${amount}` : "-"), pos.x, pos.y + 25);
+        ctx.restore();
+      }
+    }
+
+    function drawMovingChunks() {
+      const sends = visibleSends();
+      const eased = 0.5 - Math.cos(phase * Math.PI) / 2;
+      for (const send of sends) {
+        const src = positions[send.src];
+        const dst = positions[send.dst];
+        let x;
+        let y;
+        const color = colors[send.chunk % colors.length];
+        const control = src.group !== dst.group ? crossControl(edgeKey(send.src, send.dst)) : null;
+        if (control) {
+          const { start, end } = edgeEndpoints(src, dst);
+          const point = curvePoint(start, control, end, eased);
+          x = point.x;
+          y = point.y;
+          drawCurveArrow(src, dst, color, 3, 0.25 + phase * 0.45, control);
+        } else {
+          x = src.x + (dst.x - src.x) * eased;
+          y = src.y + (dst.y - src.y) * eased;
+          drawArrow(src, dst, color, 3, 0.25 + phase * 0.45);
+        }
+        ctx.save();
+        const label = isReduceScatter()
+          ? `${send.chunk}:${Math.max(1, chunkAmount(send.src, send.chunk))}`
+          : `${send.chunk}`;
+        const packetWidth = Math.max(26, label.length * 7 + 12);
+        ctx.fillStyle = color;
+        ctx.strokeStyle = "#ffffff";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.roundRect(x - packetWidth / 2, y - 10, packetWidth, 20, 5);
+        ctx.fill();
+        ctx.stroke();
+        ctx.fillStyle = "#ffffff";
+        ctx.font = "700 10px Segoe UI, Arial";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(label, x, y + 1);
+        ctx.restore();
+      }
+    }
+
+    function drawGroupLabels() {
+      ctx.save();
+      ctx.fillStyle = "#77839a";
+      ctx.font = "700 13px Segoe UI, Arial";
+      ctx.textAlign = "center";
+      groupCenters.forEach((center, group) => {
+        ctx.fillText(`Group ${group}`, center[0], center[1] - 82);
+      });
+      ctx.restore();
+    }
+
+    function draw() {
+      if (!positions.length || !holdings.length) return;
+      ctx.clearRect(0, 0, canvas.clientWidth, canvas.clientHeight);
+      drawTopology();
+      drawGroupLabels();
+      drawMovingChunks();
+      drawNodes();
+    }
+
+    function commitStep() {
+      if (isReduceScatter()) {
+        const before = holdings.map(rankState => rankState.map(contributors => new Set(contributors)));
+        const cleared = new Set();
+        for (const send of algorithm.steps[stepIndex]) {
+          cleared.add(`${send.src}:${send.chunk}`);
+        }
+        for (const item of cleared) {
+          const [rank, chunk] = item.split(":").map(Number);
+          holdings[rank][chunk].clear();
+        }
+        for (const send of algorithm.steps[stepIndex]) {
+          for (const contributor of before[send.src][send.chunk]) {
+            holdings[send.dst][send.chunk].add(contributor);
+          }
+        }
+      } else {
+        for (const send of algorithm.steps[stepIndex]) {
+          holdings[send.dst].add(send.chunk);
+        }
+      }
+      stepIndex = (stepIndex + 1) % algorithm.steps.length;
+      holdings = holdingsBefore(stepIndex);
+      phase = 0;
+      updateSidebar();
+    }
+
+    function animate(time) {
+      if (!lastTime) lastTime = time;
+      const dt = (time - lastTime) / 1000;
+      lastTime = time;
+      if (playing) {
+        phase += dt * Number(speedInput.value);
+        if (phase >= 1) {
+          commitStep();
+        }
+      }
+      draw();
+      requestAnimationFrame(animate);
+    }
+
+    playBtn.addEventListener("click", () => {
+      playing = !playing;
+      playBtn.textContent = playing ? "暂停" : "播放";
+    });
+    prevBtn.addEventListener("click", () => {
+      stepIndex = (stepIndex + algorithm.steps.length - 1) % algorithm.steps.length;
+      phase = 0;
+      rebuildState();
+      draw();
+    });
+    nextBtn.addEventListener("click", () => {
+      stepIndex = (stepIndex + 1) % algorithm.steps.length;
+      phase = 0;
+      rebuildState();
+      draw();
+    });
+    resetBtn.addEventListener("click", () => {
+      stepIndex = 0;
+      phase = 0;
+      rebuildState();
+      draw();
+    });
+    chunkFilter.addEventListener("change", () => {
+      updateSidebar();
+      draw();
+    });
+
+    window.addEventListener("resize", resize);
+    initChunkFilter();
+    rebuildState();
+    resize();
+    requestAnimationFrame(animate);
+  </script>
+</body>
+</html>

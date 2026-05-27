@@ -1,0 +1,340 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1500 1080" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', 'Helvetica Neue', Arial, sans-serif">
+  <rect width="1500" height="1080" fill="#fafafa"/>
+
+  <!-- ========================================================== -->
+  <!-- Title -->
+  <!-- ========================================================== -->
+  <text x="750" y="32" text-anchor="middle" font-size="20" font-weight="bold" fill="#1f2937">zeusCCL — 分层架构 v1.0（多算法可插拔 · 装配 / 热路径分相）</text>
+  <text x="750" y="52" text-anchor="middle" font-size="12" fill="#4b5563">单机多卡 · Tree / Ring 多算法 · Simple 协议 · 装配重 / 热路径轻 · 算法选择由 dispatch 表驱动</text>
+
+  <!-- Phase legend (top right) -->
+  <g transform="translate(1145, 60)">
+    <rect x="0" y="0" width="335" height="32" fill="#ffffff" stroke="#9ca3af" stroke-width="1" rx="4"/>
+    <rect x="8" y="8" width="16" height="16" fill="#c4b5fd" stroke="#7c3aed" stroke-width="1.5" stroke-dasharray="3 2"/>
+    <text x="30" y="20" font-size="10" fill="#374151">装配期（commInit 一次性）</text>
+    <rect x="178" y="8" width="16" height="16" fill="#fdba74" stroke="#ea580c" stroke-width="1.5"/>
+    <text x="200" y="20" font-size="10" fill="#374151">热路径（每次集合通信调用）</text>
+  </g>
+
+  <!-- ========================================================== -->
+  <!-- L1: API 层 -->
+  <!-- ========================================================== -->
+  <g>
+    <rect x="20" y="105" width="100" height="115" fill="#fff7ed" stroke="#ea580c" stroke-width="2" rx="6"/>
+    <text x="70" y="148" text-anchor="middle" font-size="15" font-weight="bold" fill="#7c2d12">API 层</text>
+    <text x="70" y="175" text-anchor="middle" font-size="10" fill="#7c2d12">用户与库的</text>
+    <text x="70" y="190" text-anchor="middle" font-size="10" fill="#7c2d12">物理隔离面</text>
+
+    <rect x="140" y="105" width="1180" height="115" fill="#fff7ed" stroke="#fdba74" stroke-width="1.5" rx="6"/>
+
+    <rect x="160" y="125" width="270" height="80" fill="#fdba74" rx="4"/>
+    <text x="295" y="152" text-anchor="middle" font-size="13" font-weight="bold" fill="#7c2d12">生命周期 (4)</text>
+    <text x="295" y="178" text-anchor="middle" font-size="11" fill="#7c2d12">communicator 是分布式状态对象，</text>
+    <text x="295" y="194" text-anchor="middle" font-size="11" fill="#7c2d12">必须可创建 / 销毁 / 紧急中止。</text>
+
+    <rect x="445" y="125" width="430" height="80" fill="#fdba74" rx="4"/>
+    <text x="660" y="152" text-anchor="middle" font-size="13" font-weight="bold" fill="#7c2d12">集合通信原语 (5)</text>
+    <text x="660" y="178" text-anchor="middle" font-size="11" fill="#7c2d12">用户只声明"做什么运算"（这五种），</text>
+    <text x="660" y="194" text-anchor="middle" font-size="11" fill="#7c2d12">"怎么走"由库内自动选 algo / 协议。</text>
+
+    <rect x="890" y="125" width="415" height="80" fill="#fdba74" rx="4"/>
+    <text x="1097" y="152" text-anchor="middle" font-size="13" font-weight="bold" fill="#7c2d12">查询 / 错误 (5)</text>
+    <text x="1097" y="178" text-anchor="middle" font-size="11" fill="#7c2d12">黑盒内部的运行期状态必须有读出口，</text>
+    <text x="1097" y="194" text-anchor="middle" font-size="11" fill="#7c2d12">否则异步错误无法被外部察觉。</text>
+  </g>
+
+  <!-- ========================================================== -->
+  <!-- L2: 调度层 enqueue -->
+  <!-- ========================================================== -->
+  <g>
+    <rect x="20" y="235" width="100" height="140" fill="#fffbeb" stroke="#d97706" stroke-width="2" rx="6"/>
+    <text x="70" y="278" text-anchor="middle" font-size="15" font-weight="bold" fill="#78350f">调度层</text>
+    <text x="70" y="298" text-anchor="middle" font-size="11" font-weight="bold" fill="#78350f">enqueue</text>
+    <text x="70" y="315" text-anchor="middle" font-size="11" font-weight="bold" fill="#7c3aed">+ group</text>
+    <text x="70" y="338" text-anchor="middle" font-size="10" fill="#78350f">把用户调用</text>
+    <text x="70" y="353" text-anchor="middle" font-size="10" fill="#78350f">翻译为 GPU 提交；</text>
+    <text x="70" y="368" text-anchor="middle" font-size="10" fill="#7c3aed">group 批量化</text>
+
+    <rect x="140" y="235" width="1180" height="140" fill="#fffbeb" stroke="#fcd34d" stroke-width="1.5" rx="6"/>
+
+    <!-- Assembly: build dispatch table -->
+    <rect x="160" y="255" width="280" height="100" fill="#fde68a" stroke="#7c3aed" stroke-width="1.5" stroke-dasharray="5 3" rx="4"/>
+    <text x="300" y="284" text-anchor="middle" font-size="13" font-weight="bold" fill="#78350f">填 dispatch 表</text>
+    <text x="300" y="302" text-anchor="middle" font-size="9" font-style="italic" fill="#7c3aed">[装配期 · 一次性]</text>
+    <text x="300" y="328" text-anchor="middle" font-size="11" fill="#78350f">算法选择放在 μs 级热路径会破延迟，</text>
+    <text x="300" y="346" text-anchor="middle" font-size="11" fill="#78350f">装配期物化为 O(1) 数组运行期只读。</text>
+
+    <!-- Hot path: 5 steps -->
+    <rect x="465" y="255" width="170" height="100" fill="#fcd34d" rx="4"/>
+    <text x="550" y="280" text-anchor="middle" font-size="12" font-weight="bold" fill="#78350f">① 参数校验</text>
+    <text x="550" y="297" text-anchor="middle" font-size="9" font-style="italic" fill="#ea580c">[热路径]</text>
+    <text x="550" y="324" text-anchor="middle" font-size="10" fill="#78350f">非法参数会破坏</text>
+    <text x="550" y="342" text-anchor="middle" font-size="10" fill="#78350f">后续状态，先拦截。</text>
+
+    <line x1="638" y1="305" x2="660" y2="305" stroke="#78350f" stroke-width="2.5"/>
+    <polygon points="667,305 657,300 657,310" fill="#78350f"/>
+
+    <rect x="665" y="255" width="160" height="100" fill="#fcd34d" rx="4"/>
+    <text x="745" y="280" text-anchor="middle" font-size="12" font-weight="bold" fill="#78350f">② 查 dispatch</text>
+    <text x="745" y="297" text-anchor="middle" font-size="9" font-style="italic" fill="#ea580c">[热路径]</text>
+    <text x="745" y="324" text-anchor="middle" font-size="10" fill="#78350f">数组下标读取</text>
+    <text x="745" y="342" text-anchor="middle" font-size="10" fill="#78350f">取代分支决策。</text>
+
+    <line x1="828" y1="305" x2="850" y2="305" stroke="#78350f" stroke-width="2.5"/>
+    <polygon points="857,305 847,300 847,310" fill="#78350f"/>
+
+    <rect x="855" y="255" width="155" height="100" fill="#fcd34d" rx="4"/>
+    <text x="932" y="280" text-anchor="middle" font-size="12" font-weight="bold" fill="#78350f">③ chunkSize</text>
+    <text x="932" y="297" text-anchor="middle" font-size="9" font-style="italic" fill="#ea580c">[热路径]</text>
+    <text x="932" y="324" text-anchor="middle" font-size="10" fill="#78350f">由 ringbuf 容量倒推：</text>
+    <text x="932" y="342" text-anchor="middle" font-size="10" fill="#78350f">大失并发小失调度。</text>
+
+    <line x1="1013" y1="305" x2="1035" y2="305" stroke="#78350f" stroke-width="2.5"/>
+    <polygon points="1042,305 1032,300 1032,310" fill="#78350f"/>
+
+    <rect x="1040" y="255" width="135" height="100" fill="#fcd34d" rx="4"/>
+    <text x="1107" y="280" text-anchor="middle" font-size="12" font-weight="bold" fill="#78350f">④ 填 WorkElem</text>
+    <text x="1107" y="297" text-anchor="middle" font-size="9" font-style="italic" fill="#ea580c">[热路径]</text>
+    <text x="1107" y="324" text-anchor="middle" font-size="10" fill="#78350f">host 栈 GPU 看不见，</text>
+    <text x="1107" y="342" text-anchor="middle" font-size="10" fill="#78350f">需打包成 kernel 参数。</text>
+
+    <line x1="1178" y1="305" x2="1200" y2="305" stroke="#78350f" stroke-width="2.5"/>
+    <polygon points="1207,305 1197,300 1197,310" fill="#78350f"/>
+
+    <rect x="1205" y="255" width="100" height="100" fill="#fcd34d" stroke="#7c3aed" stroke-width="1.5" rx="4"/>
+    <text x="1255" y="278" text-anchor="middle" font-size="12" font-weight="bold" fill="#78350f">⑤ launch</text>
+    <text x="1255" y="293" text-anchor="middle" font-size="10" font-weight="bold" fill="#7c3aed">/ queue</text>
+    <text x="1255" y="307" text-anchor="middle" font-size="9" font-style="italic" fill="#ea580c">[热路径]</text>
+    <text x="1255" y="328" text-anchor="middle" font-size="9" fill="#78350f">depth=0: launch；</text>
+    <text x="1255" y="342" text-anchor="middle" font-size="9" fill="#7c3aed">&gt;0: 入 pending。</text>
+  </g>
+
+  <!-- ========================================================== -->
+  <!-- L3: GPU 内核层 device -->
+  <!-- ========================================================== -->
+  <g>
+    <rect x="20" y="390" width="100" height="150" fill="#eff6ff" stroke="#2563eb" stroke-width="2" rx="6"/>
+    <text x="70" y="445" text-anchor="middle" font-size="15" font-weight="bold" fill="#1e3a8a">GPU 内核层</text>
+    <text x="70" y="468" text-anchor="middle" font-size="11" font-weight="bold" fill="#1e3a8a">device</text>
+    <text x="70" y="494" text-anchor="middle" font-size="10" fill="#1e3a8a">算法执行</text>
+    <text x="70" y="509" text-anchor="middle" font-size="10" fill="#1e3a8a">只能在 GPU 上</text>
+    <text x="70" y="528" text-anchor="middle" font-size="9" fill="#ea580c" font-style="italic">[纯热路径]</text>
+
+    <rect x="140" y="390" width="1180" height="150" fill="#eff6ff" stroke="#93c5fd" stroke-width="1.5" rx="6"/>
+
+    <!-- Tree kernel family -->
+    <rect x="160" y="410" width="280" height="115" fill="#93c5fd" rx="4"/>
+    <text x="300" y="440" text-anchor="middle" font-size="13" font-weight="bold" fill="#1e3a8a">Tree 算法 kernel 族</text>
+    <text x="300" y="476" text-anchor="middle" font-size="11" fill="#1e3a8a">树形拓扑 O(log N) 步收敛全和，</text>
+    <text x="300" y="496" text-anchor="middle" font-size="11" fill="#1e3a8a">是小消息延迟的物理下界。</text>
+    <text x="300" y="517" text-anchor="middle" font-size="9" fill="#1e40af" font-style="italic">AllReduce / Broadcast / Reduce</text>
+
+    <!-- Ring kernel family -->
+    <rect x="455" y="410" width="280" height="115" fill="#93c5fd" rx="4"/>
+    <text x="595" y="440" text-anchor="middle" font-size="13" font-weight="bold" fill="#1e3a8a">Ring 算法 kernel 族</text>
+    <text x="595" y="476" text-anchor="middle" font-size="11" fill="#1e3a8a">环形每边持续 100% 利用率，N−1 步均摊</text>
+    <text x="595" y="496" text-anchor="middle" font-size="11" fill="#1e3a8a">数据到所有链路 = 带宽上界。</text>
+    <text x="595" y="517" text-anchor="middle" font-size="9" fill="#1e40af" font-style="italic">AllReduce / AllGather / ReduceScatter</text>
+
+    <!-- prims_simple -->
+    <rect x="750" y="410" width="265" height="115" fill="#93c5fd" rx="4"/>
+    <text x="882" y="440" text-anchor="middle" font-size="13" font-weight="bold" fill="#1e3a8a">prims_simple.h</text>
+    <text x="882" y="476" text-anchor="middle" font-size="11" fill="#1e3a8a">跨 GPU 同步必须无锁：写者推 tail、</text>
+    <text x="882" y="496" text-anchor="middle" font-size="11" fill="#1e3a8a">读者推 head，双单向游标各走各。</text>
+    <text x="882" y="517" text-anchor="middle" font-size="9" fill="#1e40af" font-style="italic">所有 algo / collOp 共用</text>
+
+    <!-- reduce_kernel + common -->
+    <rect x="1030" y="410" width="275" height="115" fill="#93c5fd" rx="4"/>
+    <text x="1167" y="440" text-anchor="middle" font-size="13" font-weight="bold" fill="#1e3a8a">reduce_kernel.h / common.h</text>
+    <text x="1167" y="476" text-anchor="middle" font-size="11" fill="#1e3a8a">"怎么搬"与"怎么算"解耦，</text>
+    <text x="1167" y="496" text-anchor="middle" font-size="11" fill="#1e3a8a">algo kernel 复用同一组归约函子。</text>
+    <text x="1167" y="517" text-anchor="middle" font-size="9" fill="#1e40af" font-style="italic">fp16/bf16 → fp32 累加防精度劣化</text>
+  </g>
+
+  <!-- ========================================================== -->
+  <!-- L4: 传输层 transport -->
+  <!-- ========================================================== -->
+  <g>
+    <rect x="20" y="555" width="100" height="135" fill="#f0fdf4" stroke="#16a34a" stroke-width="2" rx="6"/>
+    <text x="70" y="610" text-anchor="middle" font-size="15" font-weight="bold" fill="#14532d">传输层</text>
+    <text x="70" y="633" text-anchor="middle" font-size="11" font-weight="bold" fill="#14532d">transport</text>
+    <text x="70" y="660" text-anchor="middle" font-size="10" fill="#14532d">远端显存不在</text>
+    <text x="70" y="675" text-anchor="middle" font-size="10" fill="#14532d">本进程地址空间</text>
+
+    <rect x="140" y="555" width="1180" height="135" fill="#f0fdf4" stroke="#86efac" stroke-width="1.5" rx="6"/>
+
+    <!-- Assembly: per-(algo,channel,peer) connect -->
+    <rect x="160" y="575" width="370" height="95" fill="#bbf7d0" stroke="#7c3aed" stroke-width="1.5" stroke-dasharray="5 3" rx="4"/>
+    <text x="345" y="603" text-anchor="middle" font-size="13" font-weight="bold" fill="#14532d">transport.connect</text>
+    <text x="345" y="620" text-anchor="middle" font-size="9" font-style="italic" fill="#7c3aed">[装配期 · 每 (algo, channel, peer) 三元组各一份]</text>
+    <text x="345" y="644" text-anchor="middle" font-size="11" fill="#14532d">远端 VA 默认不可见，必须用 IPC handle /</text>
+    <text x="345" y="662" text-anchor="middle" font-size="11" fill="#14532d">SHM 拉进本端，运行期才有 store/load 可言。</text>
+
+    <!-- Runtime: P2P path -->
+    <rect x="545" y="575" width="375" height="95" fill="#86efac" rx="4"/>
+    <text x="732" y="603" text-anchor="middle" font-size="13" font-weight="bold" fill="#14532d">P2P 主路径</text>
+    <text x="732" y="620" text-anchor="middle" font-size="9" font-style="italic" fill="#ea580c">[热路径]</text>
+    <text x="732" y="644" text-anchor="middle" font-size="11" font-weight="bold" fill="#14532d">PBLink / PCIe 直连 → kernel 自己 store/load，</text>
+    <text x="732" y="662" text-anchor="middle" font-size="11" fill="#14532d">零 host 介入 = 单机能达到的最低延迟。</text>
+
+    <!-- Runtime: SHM path -->
+    <rect x="935" y="575" width="370" height="95" fill="#86efac" rx="4"/>
+    <text x="1120" y="603" text-anchor="middle" font-size="13" font-weight="bold" fill="#14532d">SHM 备用路径</text>
+    <text x="1120" y="620" text-anchor="middle" font-size="9" font-style="italic" fill="#ea580c">[热路径]</text>
+    <text x="1120" y="644" text-anchor="middle" font-size="11" fill="#14532d">P2P 受 IOMMU / 虚拟化影响可能不通，</text>
+    <text x="1120" y="662" text-anchor="middle" font-size="11" fill="#14532d">用 host 共享内存兜底保证装配总能完成。</text>
+  </g>
+
+  <!-- ========================================================== -->
+  <!-- L5: 算法层 graph -->
+  <!-- ========================================================== -->
+  <g>
+    <rect x="20" y="705" width="100" height="155" fill="#faf5ff" stroke="#9333ea" stroke-width="2" rx="6"/>
+    <text x="70" y="770" text-anchor="middle" font-size="15" font-weight="bold" fill="#4c1d95">算法层</text>
+    <text x="70" y="794" text-anchor="middle" font-size="11" font-weight="bold" fill="#4c1d95">graph</text>
+    <text x="70" y="820" text-anchor="middle" font-size="10" fill="#4c1d95">拓扑外置成</text>
+    <text x="70" y="835" text-anchor="middle" font-size="10" fill="#4c1d95">XML 数据</text>
+    <text x="70" y="854" text-anchor="middle" font-size="9" fill="#7c3aed" font-style="italic">[纯装配期]</text>
+
+    <rect x="140" y="705" width="1180" height="155" fill="#faf5ff" stroke="#c4b5fd" stroke-width="1.5" rx="6"/>
+
+    <!-- XML loader -->
+    <rect x="160" y="725" width="275" height="115" fill="#c4b5fd" stroke="#7c3aed" stroke-width="1.5" stroke-dasharray="5 3" rx="4"/>
+    <text x="297" y="754" text-anchor="middle" font-size="13" font-weight="bold" fill="#4c1d95">多 XML 加载</text>
+    <text x="297" y="772" text-anchor="middle" font-size="9" font-style="italic" fill="#7c3aed">[装配期]</text>
+    <text x="297" y="800" text-anchor="middle" font-size="11" fill="#4c1d95">不同 algo 拓扑形态差异巨大，</text>
+    <text x="297" y="820" text-anchor="middle" font-size="11" fill="#4c1d95">数据驱动比库内硬编码更可演进。</text>
+
+    <!-- BDF↔rank mapping -->
+    <rect x="450" y="725" width="240" height="115" fill="#c4b5fd" stroke="#7c3aed" stroke-width="1.5" stroke-dasharray="5 3" rx="4"/>
+    <text x="570" y="754" text-anchor="middle" font-size="13" font-weight="bold" fill="#4c1d95">BDF ↔ rankId 映射</text>
+    <text x="570" y="772" text-anchor="middle" font-size="9" font-style="italic" fill="#7c3aed">[装配期 · 全 comm 共用]</text>
+    <text x="570" y="800" text-anchor="middle" font-size="11" fill="#4c1d95">BDF 是硬件位置（固定），</text>
+    <text x="570" y="820" text-anchor="middle" font-size="11" fill="#4c1d95">rankId 是程序位置（变化），需对齐。</text>
+
+    <!-- Per-algo graphs[] -->
+    <rect x="705" y="725" width="370" height="115" fill="#c4b5fd" stroke="#7c3aed" stroke-width="1.5" stroke-dasharray="5 3" rx="4"/>
+    <text x="890" y="754" text-anchor="middle" font-size="13" font-weight="bold" fill="#4c1d95">翻译为 rank 视角 graphs[algo]</text>
+    <text x="890" y="772" text-anchor="middle" font-size="9" font-style="italic" fill="#7c3aed">[装配期]</text>
+    <text x="890" y="800" text-anchor="middle" font-size="11" fill="#4c1d95">kernel 只懂 rankId，XML 中 BDF 必须翻译为 rank 邻居表，</text>
+    <text x="890" y="820" text-anchor="middle" font-size="11" fill="#4c1d95">按 algo 独立存放避免不同算法拓扑互相覆盖。</text>
+
+    <!-- Backend tagging -->
+    <rect x="1090" y="725" width="215" height="115" fill="#c4b5fd" stroke="#7c3aed" stroke-width="1.5" stroke-dasharray="5 3" rx="4"/>
+    <text x="1197" y="754" text-anchor="middle" font-size="13" font-weight="bold" fill="#4c1d95">后端标签</text>
+    <text x="1197" y="772" text-anchor="middle" font-size="9" font-style="italic" fill="#7c3aed">[装配期]</text>
+    <text x="1197" y="800" text-anchor="middle" font-size="11" fill="#4c1d95">P2P 可达性只能</text>
+    <text x="1197" y="820" text-anchor="middle" font-size="11" fill="#4c1d95">运行时探测后固化。</text>
+  </g>
+
+  <!-- ========================================================== -->
+  <!-- L6: 装配编排层 -->
+  <!-- ========================================================== -->
+  <g>
+    <rect x="20" y="875" width="100" height="160" fill="#f3f4f6" stroke="#6b7280" stroke-width="2" rx="6"/>
+    <text x="70" y="935" text-anchor="middle" font-size="15" font-weight="bold" fill="#1f2937">装配编排层</text>
+    <text x="70" y="965" text-anchor="middle" font-size="10" fill="#1f2937">多模块按序协作，</text>
+    <text x="70" y="980" text-anchor="middle" font-size="10" fill="#1f2937">需状态机统一</text>
+    <text x="70" y="995" text-anchor="middle" font-size="10" fill="#1f2937">编排</text>
+    <text x="70" y="1015" text-anchor="middle" font-size="9" fill="#7c3aed" font-style="italic">[纯装配期]</text>
+
+    <rect x="140" y="875" width="1180" height="160" fill="#f3f4f6" stroke="#9ca3af" stroke-width="1.5" rx="6"/>
+
+    <rect x="160" y="895" width="270" height="120" fill="#d1d5db" stroke="#7c3aed" stroke-width="1.5" stroke-dasharray="5 3" rx="4"/>
+    <text x="295" y="925" text-anchor="middle" font-size="13" font-weight="bold" fill="#1f2937">bootstrap</text>
+    <text x="295" y="943" text-anchor="middle" font-size="9" font-style="italic" fill="#7c3aed">[装配期]</text>
+    <text x="295" y="975" text-anchor="middle" font-size="11" fill="#1f2937">N 个独立进程无共享上下文，</text>
+    <text x="295" y="995" text-anchor="middle" font-size="11" fill="#1f2937">先建"会合点"互相发现身份。</text>
+
+    <rect x="445" y="895" width="430" height="120" fill="#d1d5db" stroke="#7c3aed" stroke-width="1.5" stroke-dasharray="5 3" rx="4"/>
+    <text x="660" y="925" text-anchor="middle" font-size="13" font-weight="bold" fill="#1f2937">comm 生命周期编排 / 状态机</text>
+    <text x="660" y="943" text-anchor="middle" font-size="9" font-style="italic" fill="#7c3aed">[装配期 · 串调链]</text>
+    <text x="660" y="970" text-anchor="middle" font-size="11" fill="#1f2937">装配链任一步失败若不清理会拖死后续，</text>
+    <text x="660" y="990" text-anchor="middle" font-size="11" fill="#1f2937">状态机让"失败回退到哪一步"成可验证约束。</text>
+    <text x="660" y="1009" text-anchor="middle" font-size="9" fill="#1f2937" font-style="italic">Uninit → Bootstrapping → Discovering → Connecting → Dispatching → Active</text>
+
+    <rect x="890" y="895" width="415" height="120" fill="#d1d5db" stroke="#7c3aed" stroke-width="1.5" stroke-dasharray="5 3" rx="4"/>
+    <text x="1097" y="925" text-anchor="middle" font-size="13" font-weight="bold" fill="#1f2937">devComm 装配 + 拷贝到 GPU</text>
+    <text x="1097" y="943" text-anchor="middle" font-size="9" font-style="italic" fill="#7c3aed">[装配期 · 最后一步]</text>
+    <text x="1097" y="975" text-anchor="middle" font-size="11" fill="#1f2937">GPU kernel 看不见 host 指针，运行期数据</text>
+    <text x="1097" y="995" text-anchor="middle" font-size="11" fill="#1f2937">必须打包后 cudaMemcpy 进 HBM 才能被读到。</text>
+  </g>
+
+  <!-- ========================================================== -->
+  <!-- Right column: cross-cutting concerns -->
+  <!-- ========================================================== -->
+  <g>
+    <rect x="1340" y="105" width="145" height="930" fill="#ecfeff" stroke="#0891b2" stroke-width="2" rx="6"/>
+    <text x="1412" y="132" text-anchor="middle" font-size="13" font-weight="bold" fill="#164e63">跨层服务</text>
+    <text x="1412" y="148" text-anchor="middle" font-size="9" fill="#164e63" font-style="italic">伴随全生命周期</text>
+
+    <rect x="1360" y="162" width="105" height="98" fill="#a5f3fc" stroke="#7c3aed" stroke-width="1.5" stroke-dasharray="5 3" rx="4"/>
+    <text x="1412" y="192" text-anchor="middle" font-size="11" font-weight="bold" fill="#164e63">XML 配置</text>
+    <text x="1412" y="210" text-anchor="middle" font-size="9" font-style="italic" fill="#7c3aed">[装配]</text>
+    <text x="1412" y="234" text-anchor="middle" font-size="10" fill="#164e63">拓扑外置成数据</text>
+    <text x="1412" y="250" text-anchor="middle" font-size="10" fill="#164e63">硬件与库独立演进</text>
+
+    <rect x="1360" y="275" width="105" height="98" fill="#a5f3fc" stroke="#7c3aed" stroke-width="1.5" stroke-dasharray="5 3" rx="4"/>
+    <text x="1412" y="305" text-anchor="middle" font-size="11" font-weight="bold" fill="#164e63">dispatch 表</text>
+    <text x="1412" y="322" text-anchor="middle" font-size="9" font-style="italic" fill="#7c3aed">[装配→热路径]</text>
+    <text x="1412" y="346" text-anchor="middle" font-size="10" fill="#164e63">用空间换时间</text>
+    <text x="1412" y="362" text-anchor="middle" font-size="10" fill="#164e63">决策搬到装配期</text>
+
+    <rect x="1360" y="388" width="105" height="98" fill="#67e8f9" rx="4"/>
+    <text x="1412" y="418" text-anchor="middle" font-size="11" font-weight="bold" fill="#164e63">ringbuf 协议</text>
+    <text x="1412" y="436" text-anchor="middle" font-size="9" font-style="italic" fill="#ea580c">[热路径]</text>
+    <text x="1412" y="460" text-anchor="middle" font-size="10" fill="#164e63">无锁同步基础</text>
+    <text x="1412" y="476" text-anchor="middle" font-size="10" fill="#164e63">双单向游标各走各</text>
+
+    <rect x="1360" y="500" width="105" height="90" fill="#67e8f9" rx="4"/>
+    <text x="1412" y="530" text-anchor="middle" font-size="11" font-weight="bold" fill="#164e63">CUDA stream</text>
+    <text x="1412" y="548" text-anchor="middle" font-size="9" font-style="italic" fill="#ea580c">[热路径]</text>
+    <text x="1412" y="572" text-anchor="middle" font-size="10" fill="#164e63">异步语义载体</text>
+    <text x="1412" y="586" text-anchor="middle" font-size="10" fill="#164e63">返回 ≠ 完成</text>
+
+    <rect x="1360" y="603" width="105" height="98" fill="#67e8f9" rx="4"/>
+    <text x="1412" y="633" text-anchor="middle" font-size="11" font-weight="bold" fill="#164e63">异常逃生</text>
+    <text x="1412" y="651" text-anchor="middle" font-size="9" font-style="italic" fill="#ea580c">[热路径检测]</text>
+    <text x="1412" y="676" text-anchor="middle" font-size="10" fill="#164e63">spin 需外部唤醒</text>
+    <text x="1412" y="692" text-anchor="middle" font-size="10" fill="#164e63">通道避免 hang 死</text>
+
+    <rect x="1360" y="713" width="105" height="90" fill="#67e8f9" rx="4"/>
+    <text x="1412" y="743" text-anchor="middle" font-size="11" font-weight="bold" fill="#164e63">日志</text>
+    <text x="1412" y="761" text-anchor="middle" font-size="9" font-style="italic" fill="#374151">[全阶段]</text>
+    <text x="1412" y="784" text-anchor="middle" font-size="10" fill="#164e63">黑盒变白盒</text>
+    <text x="1412" y="798" text-anchor="middle" font-size="10" fill="#164e63">可观测才能排查</text>
+
+    <rect x="1360" y="816" width="105" height="98" fill="#67e8f9" rx="4"/>
+    <text x="1412" y="846" text-anchor="middle" font-size="11" font-weight="bold" fill="#164e63">环境变量</text>
+    <text x="1412" y="864" text-anchor="middle" font-size="9" font-style="italic" fill="#374151">[全阶段]</text>
+    <text x="1412" y="889" text-anchor="middle" font-size="10" fill="#164e63">不重编就能调行为</text>
+    <text x="1412" y="905" text-anchor="middle" font-size="10" fill="#164e63">开关与代码分离</text>
+
+    <rect x="1360" y="925" width="105" height="98" fill="#fde68a" stroke="#7c3aed" stroke-width="1.5" stroke-dasharray="5 3" rx="4"/>
+    <text x="1412" y="952" text-anchor="middle" font-size="11" font-weight="bold" fill="#78350f">group 语义</text>
+    <text x="1412" y="968" text-anchor="middle" font-size="9" font-style="italic" fill="#7c3aed">[thread-local 装饰器]</text>
+    <text x="1412" y="988" text-anchor="middle" font-size="10" fill="#78350f">N 次 launch 合并为</text>
+    <text x="1412" y="1001" text-anchor="middle" font-size="10" fill="#78350f">1 次 + N 个 WorkElem；</text>
+    <text x="1412" y="1014" text-anchor="middle" font-size="10" fill="#78350f">多 comm 死锁消失</text>
+  </g>
+
+  <!-- ========================================================== -->
+  <!-- Dashed dividers between layers -->
+  <!-- ========================================================== -->
+  <line x1="20" y1="227" x2="1320" y2="227" stroke="#9ca3af" stroke-width="1" stroke-dasharray="6 4"/>
+  <line x1="20" y1="382" x2="1320" y2="382" stroke="#9ca3af" stroke-width="1" stroke-dasharray="6 4"/>
+  <line x1="20" y1="547" x2="1320" y2="547" stroke="#9ca3af" stroke-width="1" stroke-dasharray="6 4"/>
+  <line x1="20" y1="697" x2="1320" y2="697" stroke="#9ca3af" stroke-width="1" stroke-dasharray="6 4"/>
+  <line x1="20" y1="867" x2="1320" y2="867" stroke="#9ca3af" stroke-width="1" stroke-dasharray="6 4"/>
+
+  <!-- ========================================================== -->
+  <!-- Footer caption -->
+  <!-- ========================================================== -->
+  <text x="20" y="1056" font-size="11" fill="#666">
+    <tspan font-weight="bold">数据流：</tspan> API ↓ enqueue（查 dispatch 选 algo） ↓ 选中 algo 的 device kernel ↔ 选中 algo 的 transport ringbuf — 装配链：bootstrap → graph(多 XML→per-algo graphs) → transport.connect → enqueue 填 dispatch 表 → devComm 拷 GPU
+  </text>
+  <text x="20" y="1074" font-size="10" font-style="italic" fill="#888">
+    <tspan font-weight="bold">第一性原理：</tspan> 每个模块的存在都来自一条不可绕过的物理 / 语义约束（远端显存不可见 / GPU 看不见 host 指针 / 跨进程无共享上下文 / 算法选择不能在 μs 级热路径决策 / ...），架构是这些约束的最小化解。
+  </text>
+</svg>
